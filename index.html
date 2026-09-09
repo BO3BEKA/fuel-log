@@ -672,10 +672,17 @@ function renderAccountBlock() {
   if (user && !user.isAnonymous) {
     text.textContent = 'Signed in as ' + (user.email || user.uid) + '. Your log follows you to any device.';
     btn.style.display = 'none';
-  } else {
-    text.textContent = 'Your data is in the cloud under a temporary account. Clearing your browser data would cut you off from it. Sign in to make it permanent.';
-    btn.style.display = 'block';
+    return;
   }
+
+  const rErr = store.redirectError ? store.redirectError() : null;
+  if (rErr) {
+    text.textContent = 'The last sign-in attempt came back with: ' + (rErr.code || rErr.message) +
+      '. Your data is safe under the temporary account — try again, or open the site in Chrome.';
+  } else {
+    text.textContent = 'Your data is in the cloud under a temporary account. Clearing your browser data would cut you off from it. Sign in to make it permanent and to see the same log on your other devices.';
+  }
+  btn.style.display = 'block';
 }
 
 function sortedFoods() {
@@ -1100,14 +1107,28 @@ function saveUsdaKey() {
 }
 async function connectGoogle() {
   const btn = document.getElementById('linkGoogleBtn');
+  const text = document.getElementById('accountText');
   btn.disabled = true;
   btn.textContent = 'Opening Google…';
   try {
-    await store.signInWithGoogle();
+    const res = await store.signInWithGoogle();
+    if (res && res.redirecting) {
+      // The page is navigating away to Google. It'll come back signed in.
+      text.textContent = 'Taking you to Google…';
+      return;
+    }
     renderAccountBlock();
   } catch (e) {
-    document.getElementById('accountText').textContent =
-      'Sign-in did not complete: ' + (e.code || e.message) + '. Check that Google is enabled under Authentication, and that your site domain is listed under Authentication → Settings → Authorized domains.';
+    const code = e.code || e.message || 'unknown error';
+    let advice = '';
+    if (code.includes('unauthorized-domain')) {
+      advice = ' Add bo3beka.github.io under Authentication → Settings → Authorized domains in the Firebase console.';
+    } else if (code.includes('web-storage-unsupported')) {
+      advice = ' Your browser is blocking storage for this site. Turn off "Prevent Cross-Site Tracking" in Safari settings, or try Chrome.';
+    } else if (code.includes('operation-not-allowed')) {
+      advice = ' Enable Google under Authentication → Sign-in method in the Firebase console.';
+    }
+    text.textContent = 'Sign-in did not complete: ' + code + '.' + advice;
   } finally {
     btn.disabled = false;
     btn.textContent = 'Keep my data — sign in with Google';

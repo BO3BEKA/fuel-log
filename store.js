@@ -262,6 +262,9 @@ class LocalStore {
   async signInWithGoogle() {
     throw new Error("Add your Firebase config first.");
   }
+
+  redirectPending() { return false; }
+  redirectError() { return null; }
   currentUser() {
     return null;
   }
@@ -297,6 +300,10 @@ class CloudStore {
   async init() {
     const { auth, onAuthStateChanged, signInAnonymously } = this.fb;
 
+    // Must happen before anonymous sign-in, or a pending redirect gets
+    // stranded and you land back on a fresh throwaway account.
+    await this._completeRedirect();
+
     const user = await new Promise((resolve, reject) => {
       const stop = onAuthStateChanged(
         auth,
@@ -325,6 +332,40 @@ class CloudStore {
     await this._bootstrapAndMigrate();
     this._startUserListener();
     return { mode: "cloud", uid: this.uid };
+  }
+
+  // A redirect sign-in leaves the page, goes to Google, and comes back. This
+  // picks up the result on the way back in. It must run on every load, because
+  // there is no way to know in advance whether we are mid-redirect.
+  async _completeRedirect() {
+    const { auth, getRedirectResult, GoogleAuthProvider, signInWithRedirect } = this.fb;
+    try {
+      const cred = await getRedirectResult(auth);
+      if (cred?.user) {
+        sessionStorage.removeItem("fuellog:redirecting");
+        this._setStatus("Synced to " + (cred.user.email || "Google"), "ok");
+      }
+      return cred?.user || null;
+    } catch (e) {
+      // The Google account already owns a different uid, so it can't be linked
+      // to this anonymous one. Sign in to the existing account instead.
+      if (
+        e.code === "auth/credential-already-in-use" ||
+        e.code === "auth/email-already-in-use" ||
+        e.code === "auth/account-exists-with-different-credential"
+      ) {
+        this._redirectConflict = true;
+        if (!sessionStorage.getItem("fuellog:switching")) {
+          sessionStorage.setItem("fuellog:switching", "1");
+          await signInWithRedirect(auth, new GoogleAuthProvider());
+        }
+        return null;
+      }
+      console.warn("redirect sign-in did not complete", e);
+      sessionStorage.removeItem("fuellog:redirecting");
+      this._redirectError = e;
+      return null;
+    }
   }
 
   // Creates the user doc on first run and lifts any existing localStorage data
@@ -530,22 +571,55 @@ class CloudStore {
 
   // Anonymous accounts die with the browser's storage. Linking to Google keeps
   // the same uid and therefore the same data, on any device.
+  //
+  // iOS Safari blocks the popup no matter how it's triggered, so a blocked
+  // popup falls back to a full-page redirect. The page leaves, comes back, and
+  // _completeRedirect() picks up the result on the next load.
   async signInWithGoogle() {
-    const { auth, GoogleAuthProvider, linkWithPopup, signInWithPopup } = this.fb;
-    const provider = new GoogleAuthProvider();
+    const {
+      auth, GoogleAuthProvider, linkWithPopup, signInWithPopup,
+      linkWithRedirect, signInWithRedirect,
+    } = this.fb;
+
+    const POPUP_UNAVAILABLE = [
+      "auth/popup-blocked",
+      "auth/popup-closed-by-user",
+      "auth/cancelled-popup-request",
+      "auth/operation-not-supported-in-this-environment",
+      "auth/web-storage-unsupported",
+    ];
+
+    const provider = () => new GoogleAuthProvider();
+
     try {
-      const cred = await linkWithPopup(auth.currentUser, provider);
+      const cred = await linkWithPopup(auth.currentUser, provider());
       this._setStatus("Synced to " + (cred.user.email || "Google"), "ok");
-      return cred.user;
+      return { user: cred.user, redirecting: false };
     } catch (e) {
+      if (POPUP_UNAVAILABLE.includes(e.code)) {
+        sessionStorage.setItem("fuellog:redirecting", "1");
+        await linkWithRedirect(auth.currentUser, provider());
+        return { user: null, redirecting: true };
+      }
+
+      // Already linked, or that Google account owns a different uid.
       if (
         e.code === "auth/credential-already-in-use" ||
         e.code === "auth/email-already-in-use" ||
         e.code === "auth/provider-already-linked"
       ) {
-        const cred = await signInWithPopup(auth, provider);
-        this._setStatus("Synced to " + (cred.user.email || "Google"), "ok");
-        return cred.user;
+        try {
+          const cred = await signInWithPopup(auth, provider());
+          this._setStatus("Synced to " + (cred.user.email || "Google"), "ok");
+          return { user: cred.user, redirecting: false };
+        } catch (e2) {
+          if (POPUP_UNAVAILABLE.includes(e2.code)) {
+            sessionStorage.setItem("fuellog:redirecting", "1");
+            await signInWithRedirect(auth, provider());
+            return { user: null, redirecting: true };
+          }
+          throw e2;
+        }
       }
       throw e;
     }
@@ -553,6 +627,14 @@ class CloudStore {
 
   currentUser() {
     return this.fb.auth.currentUser;
+  }
+
+  redirectPending() {
+    return !!sessionStorage.getItem("fuellog:redirecting");
+  }
+
+  redirectError() {
+    return this._redirectError || null;
   }
 }
 
@@ -586,6 +668,9 @@ async function loadFirebase() {
     GoogleAuthProvider: authMod.GoogleAuthProvider,
     linkWithPopup: authMod.linkWithPopup,
     signInWithPopup: authMod.signInWithPopup,
+    linkWithRedirect: authMod.linkWithRedirect,
+    signInWithRedirect: authMod.signInWithRedirect,
+    getRedirectResult: authMod.getRedirectResult,
     doc: fsMod.doc,
     collection: fsMod.collection,
     query: fsMod.query,
