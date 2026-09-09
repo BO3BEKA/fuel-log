@@ -251,6 +251,14 @@ class LocalStore {
     if (this._cbs.recent) this._cbs.recent(next);
   }
 
+  async getCachedBarcode(upc) {
+    return loadJSON(PREFIX + "barcode:" + upc, null);
+  }
+
+  async cacheBarcode(upc, data) {
+    saveJSON(PREFIX + "barcode:" + upc, data);
+  }
+
   async signInWithGoogle() {
     throw new Error("Add your Firebase config first.");
   }
@@ -494,6 +502,30 @@ class CloudStore {
   async noteRecent(food) {
     const next = mergeRecent(this._userData.recent || [], food);
     await this.fb.setDoc(this._userRef, { recent: next }, { merge: true });
+  }
+
+  // The barcode cache is shared across all users of the app, so the second
+  // scan of a given product anywhere is instant and works offline.
+  async getCachedBarcode(upc) {
+    const { doc, getDoc, db } = this.fb;
+    try {
+      const snap = await getDoc(doc(db, "barcodes", String(upc)));
+      return snap.exists() ? snap.data() : null;
+    } catch (e) {
+      console.warn("barcode cache read failed", e);
+      return null;
+    }
+  }
+
+  async cacheBarcode(upc, data) {
+    const { doc, setDoc, db } = this.fb;
+    try {
+      // The key list here must match firestore.rules exactly or this is
+      // rejected. Failing quietly is fine — it is only a cache.
+      await setDoc(doc(db, "barcodes", String(upc)), data);
+    } catch (e) {
+      console.warn("barcode cache write refused", e);
+    }
   }
 
   // Anonymous accounts die with the browser's storage. Linking to Google keeps

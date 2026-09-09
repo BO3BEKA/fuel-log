@@ -241,6 +241,38 @@
   .log-item .rm:hover { color: var(--danger); }
 
   .fab-row { display: flex; gap: 8px; margin-top: 10px; }
+
+  .scan-btn { width: 100%; margin-bottom: 10px; display: flex; align-items: center; justify-content: center; gap: 7px; }
+  .scan-wrap {
+    position: relative; width: 100%; aspect-ratio: 4 / 3; background: #000;
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden; margin-bottom: 10px;
+  }
+  .scan-wrap video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .scan-reticle {
+    position: absolute; inset: 22% 10%; border: 2px solid rgba(232,150,60,0.85);
+    border-radius: 8px; pointer-events: none;
+  }
+  .scan-tools { display: flex; gap: 8px; margin-bottom: 12px; }
+
+  .badge {
+    display: inline-block; font-size: 9.5px; letter-spacing: 0.02em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 4px; border: 1px solid var(--line); color: var(--text-muted);
+    vertical-align: middle;
+  }
+  .badge.off { color: var(--sage); border-color: rgba(91,156,122,0.4); }
+  .badge.ref { color: var(--blue); border-color: rgba(111,155,209,0.4); }
+  .badge.brand { color: var(--amber); border-color: rgba(232,150,60,0.4); }
+  .badge.cache { color: var(--violet); border-color: rgba(154,134,196,0.4); }
+
+  .search-result .rtop { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; flex-wrap: wrap; }
+  .search-result .rname { font-size: 12.5px; font-weight: 500; margin: 0; }
+  .search-result .rbrand { font-size: 11px; color: var(--text-muted); }
+  .stale-note { font-size: 10.5px; color: var(--amber); margin-top: 3px; }
+
+  .serv-row { display: grid; grid-template-columns: 1.4fr 1fr auto; gap: 6px; align-items: end; margin-bottom: 6px; }
+  .serv-row button { background: none; border: 1px solid var(--line); border-radius: 8px; color: var(--text-muted); cursor: pointer; padding: 10px 10px; font-family: inherit; }
+  .link-btn { background: none; border: none; color: var(--amber); font-family: inherit; font-size: 12px; cursor: pointer; padding: 2px; }
+
   .toast {
     position: fixed; left: 50%; transform: translateX(-50%); bottom: 24px;
     background: var(--surface-raised); border: 1px solid var(--line); border-radius: 10px;
@@ -339,13 +371,15 @@
 
     <!-- Step 1: pick or define the food -->
     <div class="step active" id="stepPick">
+      <button class="btn btn-ghost scan-btn" onclick="openScanner()">📷 Scan a barcode</button>
+
       <div class="search-row">
-        <input id="usdaQuery" placeholder="Search USDA food database..." onkeydown="if(event.key==='Enter'){event.preventDefault();searchUSDA();}">
-        <button class="btn btn-primary btn-sm" onclick="searchUSDA()">Search</button>
+        <input id="usdaQuery" placeholder="Search by name or brand…" onkeydown="if(event.key==='Enter'){event.preventDefault();runSearch();}">
+        <button class="btn btn-primary btn-sm" onclick="runSearch()">Search</button>
       </div>
       <div class="search-results" id="searchResults"></div>
 
-      <div class="divider-text">or enter it yourself</div>
+      <div class="divider-text">or type it off the label</div>
 
       <div class="field"><label for="mName">Name</label><input id="mName" placeholder="e.g. Chick-fil-A sandwich"></div>
 
@@ -379,6 +413,7 @@
         <div>
           <div class="dname" id="draftName">—</div>
           <div class="drate" id="draftRate">—</div>
+          <button class="link-btn" style="padding-left:0;margin-top:4px;" onclick="openEditStep()">Numbers wrong? Edit them</button>
         </div>
         <button onclick="backToPick()">Change</button>
       </div>
@@ -406,6 +441,69 @@
         <button class="btn btn-primary" style="flex:1" id="logItBtn" onclick="submitPortion()">Log it</button>
         <button class="btn btn-ghost" onclick="closeLogModal()">Cancel</button>
       </div>
+    </div>
+
+    <!-- Step 3: correct the nutrition numbers -->
+    <div class="step" id="stepEdit">
+      <div class="sub" style="margin-bottom:12px;">Copy these straight off the package. Whatever you put here is what gets used from now on.</div>
+
+      <div class="field"><label for="eName">Name</label><input id="eName"></div>
+
+      <div class="ref-row" style="margin-bottom:10px;">
+        <div class="field" style="margin:0"><label for="eRefAmount">These numbers are for</label><input id="eRefAmount" type="number" inputmode="decimal"></div>
+        <div class="field" style="margin:0"><label for="eRefUnit">of</label>
+          <select id="eRefUnit">
+            <option value="serving">serving (one of these)</option>
+            <option value="g">grams</option>
+            <option value="ml">millilitres</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="macro-grid-4">
+        <div class="field"><label for="eCal">Cal</label><input id="eCal" type="number" inputmode="decimal"></div>
+        <div class="field"><label for="ePro">Pro g</label><input id="ePro" type="number" inputmode="decimal"></div>
+        <div class="field"><label for="eCarb">Carb g</label><input id="eCarb" type="number" inputmode="decimal"></div>
+        <div class="field"><label for="eFat">Fat g</label><input id="eFat" type="number" inputmode="decimal"></div>
+      </div>
+
+      <div class="field" style="margin-top:6px;">
+        <label>Named portions (optional) — e.g. “1 container” = 150</label>
+        <div id="servRows"></div>
+        <button class="link-btn" onclick="addServRow()">+ Add a named portion</button>
+      </div>
+
+      <div class="actions" style="margin-top:12px;">
+        <button class="btn btn-primary" style="flex:1" onclick="saveEditStep()">Save numbers</button>
+        <button class="btn btn-ghost" onclick="showStep('stepPortion')">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== Scanner ===================== -->
+<div class="modal-backdrop" id="scanBackdrop" onclick="if(event.target===this) closeScanner()">
+  <div class="modal">
+    <h2>Scan a barcode</h2>
+    <div class="sub" id="scanStatus">Starting camera…</div>
+
+    <div class="scan-wrap" id="scanWrap">
+      <video id="scanVideo" playsinline muted></video>
+      <div class="scan-reticle"></div>
+    </div>
+
+    <div class="scan-tools">
+      <button class="btn btn-ghost" style="flex:1;display:none;" id="torchBtn" onclick="toggleTorch()">Light</button>
+    </div>
+
+    <div class="divider-text">or type the digits</div>
+    <div class="search-row">
+      <input id="manualBarcode" inputmode="numeric" placeholder="e.g. 894700010045" onkeydown="if(event.key==='Enter'){event.preventDefault();lookupTypedBarcode();}">
+      <button class="btn btn-primary btn-sm" onclick="lookupTypedBarcode()">Look up</button>
+    </div>
+
+    <div class="actions" style="margin-top:12px;">
+      <button class="btn btn-ghost btn-block" onclick="closeScanner()">Cancel</button>
     </div>
   </div>
 </div>
@@ -459,8 +557,13 @@
 import { createStore, DEFAULT_GOALS } from './store.js';
 import {
   MEALS, inferMeal, mealLabel, normalizeFood, portionOptions, findOption,
-  scale, describePortion, foodFromUSDA, trimNum, round, sumMacros, groupByMeal, UNIT_LABELS,
+  scale, describePortion, trimNum, round, sumMacros, groupByMeal, UNIT_LABELS,
 } from './portions.js';
+import {
+  searchFoods, lookupBarcode, candidateToFood, candidateSummary,
+  candidateToCache, cacheToCandidate,
+} from './foodsearch.js';
+import { startScanner, cameraSupported, secureEnough } from './scanner.js';
 
 /* ---------- state ---------- */
 
@@ -473,7 +576,9 @@ let log = [];
 let goals = { ...DEFAULT_GOALS };
 let editMode = false;
 let unwatchDay = null;
-let usdaResults = {};
+let candidates = {};
+let scanHandle = null;
+let servDraft = [];
 
 // The food being logged right now, plus the chosen portion and meal.
 let draft = null;          // normalized food
@@ -820,6 +925,7 @@ function openLogModal(mealId) {
 }
 
 function closeLogModal() {
+  if (scanHandle) { scanHandle.stop(); scanHandle = null; }
   document.getElementById('modalBackdrop').classList.remove('open');
   ['mName','mCal','mPro','mCarb','mFat','pQty'].forEach((id) => { document.getElementById(id).value = ''; });
   document.getElementById('mRefAmount').value = '1';
@@ -831,7 +937,7 @@ function closeLogModal() {
 }
 
 function showStep(id) {
-  ['stepPick','stepPortion'].forEach((s) => {
+  ['stepPick','stepPortion','stepEdit'].forEach((s) => {
     document.getElementById(s).classList.toggle('active', s === id);
   });
 }
@@ -1008,106 +1114,211 @@ async function connectGoogle() {
   }
 }
 
-/* ---------- USDA search ---------- */
+/* ---------- search across both databases ---------- */
 
-// USDA returns two nutrients both called "Energy" — one KCAL, one KJ — in no
-// guaranteed order. Without the unit filter you silently log a 4.184x overcount.
-function pickNutrient(nutrients, matchNames, unit) {
-  if (!nutrients) return 0;
-  const unitOk = (x) => !unit || String(x.unitName || '').toUpperCase() === unit;
-  for (const x of nutrients) {
-    if (!unitOk(x)) continue;
-    const name = String(x.nutrientName || '').toLowerCase();
-    if (matchNames.some((m) => name === m)) return Number(x.value) || 0;
+const BADGE = {
+  'Open Food Facts': { cls: 'off', text: 'Open Food Facts' },
+  'USDA reference': { cls: 'ref', text: 'USDA reference' },
+  'USDA branded': { cls: 'brand', text: 'USDA branded' },
+  'cached': { cls: 'cache', text: 'Saved scan' },
+};
+
+function renderCandidates(list, extraNote) {
+  const el = document.getElementById('searchResults');
+  candidates = {};
+  if (!list.length) {
+    el.innerHTML = `<div class="search-status">No matches.${extraNote ? ' ' + escapeHtml(extraNote) : ''}<br>Try a shorter search, scan the barcode, or type it off the label below.</div>`;
+    return;
   }
-  for (const x of nutrients) {
-    if (!unitOk(x)) continue;
-    const name = String(x.nutrientName || '').toLowerCase();
-    if (matchNames.some((m) => name.includes(m))) return Number(x.value) || 0;
-  }
-  return 0;
+  el.innerHTML =
+    (extraNote ? `<div class="search-status">${escapeHtml(extraNote)}</div>` : '') +
+    list.map((c, i) => {
+      candidates[i] = c;
+      const s = candidateSummary(c);
+      const b = BADGE[c.source] || { cls: '', text: c.source };
+      return `
+        <button class="search-result" onclick="useCandidate(${i})">
+          <div class="rtop">
+            <span class="rname">${escapeHtml(c.name)}</span>
+            <span class="badge ${b.cls}">${escapeHtml(b.text)}</span>
+          </div>
+          ${c.brand ? `<div class="rbrand">${escapeHtml(c.brand)}</div>` : ''}
+          <div class="rmacros num">${round(s.macros.cal)} cal · ${round(s.macros.pro)}g P · ${round(s.macros.carb)}g C · ${round(s.macros.fat)}g F
+            <span style="opacity:0.7">${escapeHtml(s.basis)}</span></div>
+          ${c.stale ? '<div class="stale-note">Manufacturer-submitted — check it against the package</div>' : ''}
+        </button>`;
+    }).join('');
 }
 
-// Label serving sizes come through in grams, millilitres or neither.
-function labelServingGrams(f) {
-  const size = Number(f.servingSize) || 0;
-  const unit = String(f.servingSizeUnit || '').toLowerCase();
-  if (size <= 0) return 0;
-  if (unit === 'g' || unit === 'grm' || unit === 'gram') return size;
-  if (unit === 'ml' || unit === 'mlt') return size;   // close enough for most drinks
-  return 0;
-}
-
-async function searchUSDA() {
+async function runSearch() {
   const query = document.getElementById('usdaQuery').value.trim();
-  const resultsEl = document.getElementById('searchResults');
+  const el = document.getElementById('searchResults');
   if (!query) return;
 
-  const apiKey = localStorage.getItem(USDA_KEY_STORAGE);
-  if (!apiKey) {
-    resultsEl.innerHTML = '<div class="search-status">No USDA API key set yet. Tap the gear icon top right to add one — it is free and takes a minute.</div>';
+  el.innerHTML = '<div class="search-status">Searching Open Food Facts and USDA…</div>';
+  try {
+    const { results, errors } = await searchFoods(query, {
+      usdaKey: localStorage.getItem(USDA_KEY_STORAGE),
+    });
+    renderCandidates(results, errors.length ? errors.join('. ') + '.' : '');
+  } catch (e) {
+    console.error(e);
+    el.innerHTML = '<div class="search-status">Search failed. Check your connection and try again.</div>';
+  }
+}
+
+function useCandidate(i) {
+  const c = candidates[i];
+  if (!c) return;
+  setDraft(candidateToFood(c), null);
+}
+
+/* ---------- barcode scanning ---------- */
+
+function openScanner() {
+  document.getElementById('scanBackdrop').classList.add('open');
+  document.getElementById('manualBarcode').value = '';
+  const wrap = document.getElementById('scanWrap');
+  const status = document.getElementById('scanStatus');
+
+  if (!secureEnough() || !cameraSupported()) {
+    wrap.style.display = 'none';
+    document.getElementById('torchBtn').style.display = 'none';
+    status.textContent = !secureEnough()
+      ? 'The camera needs an https:// address. Type the digits below instead.'
+      : 'This browser will not give a web page camera access. Type the digits below instead.';
     return;
   }
 
-  resultsEl.innerHTML = '<div class="search-status">Searching…</div>';
-  try {
-    const url = 'https://api.nal.usda.gov/fdc/v1/foods/search?api_key=' + encodeURIComponent(apiKey) +
-      '&query=' + encodeURIComponent(query) + '&pageSize=10';
-    const res = await fetch(url);
-    if (!res.ok) {
-      resultsEl.innerHTML = '<div class="search-status">Search failed with status ' + res.status + '. Check your API key in settings.</div>';
-      return;
-    }
-    const data = await res.json();
-    const items = data.foods || [];
-    if (items.length === 0) {
-      resultsEl.innerHTML = '<div class="search-status">No results. Try a simpler search term.</div>';
-      return;
-    }
+  wrap.style.display = 'block';
+  status.textContent = 'Starting camera…';
 
-    usdaResults = {};
-    resultsEl.innerHTML = items.map((f, i) => {
-      let raw, note;
-      if (f.labelNutrients) {
-        const grams = labelServingGrams(f);
-        raw = {
-          name: f.description,
-          cal: f.labelNutrients.calories?.value || 0,
-          pro: f.labelNutrients.protein?.value || 0,
-          carb: f.labelNutrients.carbohydrates?.value || 0,
-          fat: f.labelNutrients.fat?.value || 0,
-          perLabelServing: true,
-          servingGrams: grams,
-          servingLabel: f.servingSize ? `1 serving (${trimNum(f.servingSize)}${f.servingSizeUnit || ''})` : '1 serving',
-        };
-        note = grams > 0 ? `per ${trimNum(f.servingSize)}${f.servingSizeUnit || ''} serving` : 'per label serving';
-      } else {
-        const n = f.foodNutrients || [];
-        raw = {
-          name: f.description,
-          cal: pickNutrient(n, ['energy'], 'KCAL'),
-          pro: pickNutrient(n, ['protein'], 'G'),
-          carb: pickNutrient(n, ['carbohydrate, by difference', 'carbohydrate'], 'G'),
-          fat: pickNutrient(n, ['total lipid (fat)', 'fat'], 'G'),
-        };
-        note = 'per 100g';
-      }
-      usdaResults[i] = raw;
-      return `
-        <button class="search-result" onclick="useUSDAResult(${i})">
-          <div class="rname">${escapeHtml(f.description)}</div>
-          <div class="rmacros num">${round(raw.cal)} cal · ${round(raw.pro)}g P · ${round(raw.carb)}g C · ${round(raw.fat)}g F <span style="opacity:0.7">(${escapeHtml(note)})</span></div>
-        </button>`;
-    }).join('');
-  } catch (e) {
-    resultsEl.innerHTML = '<div class="search-status">Search error. Check your connection and try again.</div>';
-  }
+  startScanner({
+    video: document.getElementById('scanVideo'),
+    onStatus: (s) => { status.textContent = s; },
+    onResult: (code) => { handleBarcode(code); },
+  })
+    .then((h) => {
+      scanHandle = h;
+      const torch = document.getElementById('torchBtn');
+      torch.style.display = h.torchAvailable ? 'block' : 'none';
+    })
+    .catch((err) => {
+      console.error(err);
+      wrap.style.display = 'none';
+      status.textContent =
+        (err && err.name === 'NotAllowedError')
+          ? 'Camera permission was denied. Allow it in your browser settings, or type the digits below.'
+          : (err.message || 'Could not start the camera.') + ' Type the digits below instead.';
+    });
 }
 
-function useUSDAResult(i) {
-  const raw = usdaResults[i];
-  if (!raw) return;
-  setDraft(foodFromUSDA(raw), null);
+function closeScanner() {
+  if (scanHandle) { scanHandle.stop(); scanHandle = null; }
+  document.getElementById('scanBackdrop').classList.remove('open');
+  document.getElementById('torchBtn').style.display = 'none';
+}
+
+async function toggleTorch() {
+  if (!scanHandle) return;
+  const on = await scanHandle.setTorch(!scanHandle.torchOn);
+  if (on) document.getElementById('torchBtn').textContent = scanHandle.torchOn ? 'Light off' : 'Light';
+}
+
+function lookupTypedBarcode() {
+  const code = document.getElementById('manualBarcode').value.replace(/\D/g, '');
+  if (code.length < 8) {
+    document.getElementById('scanStatus').textContent = 'A barcode is at least 8 digits.';
+    return;
+  }
+  handleBarcode(code);
+}
+
+async function handleBarcode(code) {
+  if (scanHandle) { scanHandle.stop(); scanHandle = null; }
+  const status = document.getElementById('scanStatus');
+  document.getElementById('scanWrap').style.display = 'none';
+  status.textContent = 'Looking up ' + code + '…';
+
+  // The shared cache first: instant, and it works with no signal.
+  let cand = null;
+  try {
+    const cached = await store.getCachedBarcode(code);
+    if (cached) cand = cacheToCandidate(cached, code);
+  } catch { /* cache is optional */ }
+
+  if (!cand) {
+    try {
+      cand = await lookupBarcode(code, { usdaKey: localStorage.getItem(USDA_KEY_STORAGE) });
+      if (cand) store.cacheBarcode(code, candidateToCache(cand));
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  if (!cand) {
+    status.textContent = `Nothing found for ${code}. It may not be in the databases yet — close this and type it off the label, and it'll be saved as a quick add.`;
+    return;
+  }
+
+  closeScanner();
+  const food = candidateToFood(cand);
+  setDraft(food, null);
+  toast(`Found ${cand.name}`);
+}
+
+/* ---------- editing the numbers ---------- */
+
+function openEditStep() {
+  if (!draft) return;
+  document.getElementById('eName').value = draft.name;
+  document.getElementById('eRefAmount').value = trimNum(draft.refAmount);
+  document.getElementById('eRefUnit').value = draft.refUnit;
+  document.getElementById('eCal').value = trimNum(draft.cal);
+  document.getElementById('ePro').value = trimNum(draft.pro);
+  document.getElementById('eCarb').value = trimNum(draft.carb);
+  document.getElementById('eFat').value = trimNum(draft.fat);
+  servDraft = draft.servings.map((s) => ({ ...s }));
+  renderServRows();
+  showStep('stepEdit');
+}
+
+function renderServRows() {
+  document.getElementById('servRows').innerHTML = servDraft.map((s, i) => `
+    <div class="serv-row">
+      <input value="${escapeAttr(s.label)}" placeholder="1 container" oninput="setServ(${i},'label',this.value)">
+      <input type="number" inputmode="decimal" value="${s.amount || ''}" placeholder="150" oninput="setServ(${i},'amount',this.value)">
+      <button onclick="removeServ(${i})" aria-label="Remove portion">×</button>
+    </div>`).join('');
+}
+function setServ(i, field, value) {
+  if (!servDraft[i]) return;
+  servDraft[i][field] = field === 'amount' ? (parseFloat(value) || 0) : value;
+}
+function addServRow() { servDraft.push({ label: '', amount: 0 }); renderServRows(); }
+function removeServ(i) { servDraft.splice(i, 1); renderServRows(); }
+
+async function saveEditStep() {
+  const patch = {
+    name: document.getElementById('eName').value.trim() || draft.name,
+    refAmount: parseFloat(document.getElementById('eRefAmount').value) || 1,
+    refUnit: document.getElementById('eRefUnit').value,
+    cal: parseFloat(document.getElementById('eCal').value) || 0,
+    pro: parseFloat(document.getElementById('ePro').value) || 0,
+    carb: parseFloat(document.getElementById('eCarb').value) || 0,
+    fat: parseFloat(document.getElementById('eFat').value) || 0,
+    servings: servDraft.filter((s) => s.label.trim() && s.amount > 0),
+  };
+
+  const savedId = draftFoodId;
+  // Changing the reference unit invalidates whatever portion was picked, so
+  // reset the default to the new reference amount.
+  setDraft({ ...draft, ...patch, defaultQty: patch.refAmount, defaultUnitId: patch.refUnit }, savedId);
+
+  if (savedId) {
+    await store.updateFood(savedId, patch);
+    toast('Numbers updated');
+  }
 }
 
 /* ---------- expose handlers ----------
@@ -1119,11 +1330,13 @@ Object.assign(window, {
   shiftDay, goToToday, jumpToDate, openDatePicker, copyPreviousDay,
   toggleGoalsForm, saveGoals, toggleEdit, deletePreset,
   openLogModal, closeLogModal, backToPick, continueFromManual, submitPortion,
-  refreshPreview, setDraftMeal, setQuickMeal,
+  refreshPreview, setDraftMeal, setQuickMeal, showStep,
   logPreset, logRecent, adjustPreset, removeLogEntry,
   openQuickAdd, closeQuickAdd, submitQuickAdd,
   openSettingsModal, closeSettingsModal, saveUsdaKey, connectGoogle,
-  searchUSDA, useUSDAResult,
+  runSearch, useCandidate,
+  openScanner, closeScanner, toggleTorch, lookupTypedBarcode,
+  openEditStep, saveEditStep, addServRow, removeServ, setServ,
 });
 
 async function removeLogEntry(id) { await store.removeEntry(dateKey(viewDate), id); }
