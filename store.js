@@ -1,40 +1,48 @@
 // store.js — the only file in the app that knows where data lives.
 //
 // Two interchangeable backends behind one interface:
-//   LocalStore  — localStorage, same keys the app already used. No account.
+//   LocalStore  — localStorage. No account, this device only.
 //   CloudStore  — Firestore + anonymous auth, with offline persistence.
 //
 // The app picks CloudStore when firebase-config.js has real values, otherwise
-// LocalStore. That means you can commit and deploy at any point during setup
-// without the app breaking.
+// LocalStore, so it never hard-fails while you are mid-setup.
 //
 // Interface (both backends):
 //   await init()                     -> { mode, uid }
 //   onStatus(cb)                     -> cb({ mode, label, tone })
-//   onGoals(cb)                      -> cb(goals)
-//   onFoods(cb)                      -> cb([food])
+//   onGoals(cb) / onRecent(cb) / onFoods(cb)
 //   watchDay(dayKey, cb)             -> unsubscribe(); cb([entry])
+//   getDayEntries(dayKey)            -> [entry]   (one-off read)
 //   setGoals(goals)
-//   addEntry(dayKey, entry) / removeEntry(dayKey, entryId)
-//   addFood(food) / deleteFood(id) / bumpFood(id)
+//   addEntry(dayKey, entry) / addEntries(dayKey, []) / removeEntry(dayKey, id)
+//   copyDay(fromKey, toKey)          -> number copied
+//   addFood(food) / updateFood(id, patch) / deleteFood(id) / bumpFood(id)
+//   noteRecent(food)
 //   signInWithGoogle() / currentUser()
 
 import { firebaseConfig, isConfigured, SDK } from "./firebase-config.js";
+import { normalizeFood } from "./portions.js";
 
 const PREFIX = "fuellog:";
 const PRESETS_KEY = PREFIX + "presets";
 const GOALS_KEY = PREFIX + "goals";
+const RECENT_KEY = PREFIX + "recent";
 const dayStorageKey = (k) => PREFIX + "log:" + k;
+
+const RECENT_MAX = 20;
 
 export const DEFAULT_GOALS = { calories: 2700, protein: 155, carbs: 0, fat: 0 };
 
+// Seeded on a brand new install. One-serving foods, which is the honest shape
+// for a dining hall estimate — give any of them real gram amounts later by
+// editing them.
 export const DEFAULT_FOODS = [
-  { id: "p1", name: "Rand Dining — chicken bowl", cal: 650, pro: 45, carb: 60, fat: 18 },
-  { id: "p2", name: "Rand Dining — omelet + toast", cal: 520, pro: 30, carb: 40, fat: 22 },
-  { id: "p3", name: "Publix — rotisserie chicken + rice", cal: 600, pro: 50, carb: 55, fat: 15 },
-  { id: "p4", name: "Publix — protein shake", cal: 250, pro: 30, carb: 12, fat: 6 },
-  { id: "p5", name: "Commons — pasta station", cal: 700, pro: 25, carb: 95, fat: 20 },
-  { id: "p6", name: "Protein bar", cal: 220, pro: 20, carb: 22, fat: 7 },
+  { id: "p1", name: "Rand Dining — chicken bowl", cal: 650, pro: 45, carb: 60, fat: 18, refAmount: 1, refUnit: "serving" },
+  { id: "p2", name: "Rand Dining — omelet + toast", cal: 520, pro: 30, carb: 40, fat: 22, refAmount: 1, refUnit: "serving" },
+  { id: "p3", name: "Publix — rotisserie chicken + rice", cal: 600, pro: 50, carb: 55, fat: 15, refAmount: 1, refUnit: "serving" },
+  { id: "p4", name: "Publix — protein shake", cal: 250, pro: 30, carb: 12, fat: 6, refAmount: 1, refUnit: "serving" },
+  { id: "p5", name: "Commons — pasta station", cal: 700, pro: 25, carb: 95, fat: 20, refAmount: 1, refUnit: "serving" },
+  { id: "p6", name: "Protein bar", cal: 220, pro: 20, carb: 22, fat: 7, refAmount: 1, refUnit: "serving" },
 ];
 
 function loadJSON(key, fallback) {
@@ -54,6 +62,60 @@ function saveJSON(key, value) {
 }
 const newId = (p) => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
+// Everything written for a logged item. Macros are computed at log time and
+// stored, so editing a food later never rewrites your history.
+function entryPayload(e) {
+  return {
+    name: String(e.name || "").slice(0, 200),
+    cal: Number(e.cal) || 0,
+    pro: Number(e.pro) || 0,
+    carb: Number(e.carb) || 0,
+    fat: Number(e.fat) || 0,
+    qty: Number(e.qty) || 1,
+    portionId: e.portionId || "serving",
+    portionLabel: String(e.portionLabel || "").slice(0, 60),
+    meal: e.meal || "snack",
+    foodId: e.foodId || null,
+    time: e.time || "",
+    at: Number(e.at) || Date.now(),
+  };
+}
+
+function foodPayload(f) {
+  const n = normalizeFood(f);
+  return {
+    name: String(n.name || "").slice(0, 200),
+    cal: n.cal, pro: n.pro, carb: n.carb, fat: n.fat,
+    refAmount: n.refAmount,
+    refUnit: n.refUnit,
+    servings: n.servings.slice(0, 8),
+    defaultQty: n.defaultQty,
+    defaultUnitId: n.defaultUnitId,
+    logCount: Number(f.logCount) || 0,
+    lastUsed: Number(f.lastUsed) || Date.now(),
+  };
+}
+
+// A compact copy of a food you just logged, for the Recent strip.
+function recentPayload(f) {
+  const n = normalizeFood(f);
+  return {
+    name: n.name,
+    cal: n.cal, pro: n.pro, carb: n.carb, fat: n.fat,
+    refAmount: n.refAmount, refUnit: n.refUnit,
+    servings: n.servings.slice(0, 4),
+    defaultQty: n.defaultQty, defaultUnitId: n.defaultUnitId,
+    at: Date.now(),
+  };
+}
+
+function mergeRecent(list, food) {
+  const item = recentPayload(food);
+  if (!item.name) return list || [];
+  const rest = (list || []).filter((r) => r && r.name !== item.name);
+  return [item, ...rest].slice(0, RECENT_MAX);
+}
+
 /* ------------------------------------------------------------------ *
  * LocalStore
  * ------------------------------------------------------------------ */
@@ -62,9 +124,7 @@ class LocalStore {
   constructor() {
     this.mode = "local";
     this.fellBack = false;
-    this._status = null;
-    this._goals = null;
-    this._foods = null;
+    this._cbs = { status: null, goals: null, foods: null, recent: null };
     this._day = { key: null, cb: null };
   }
 
@@ -73,7 +133,7 @@ class LocalStore {
   }
 
   onStatus(cb) {
-    this._status = cb;
+    this._cbs.status = cb;
     cb({
       mode: "local",
       label: this.fellBack ? "Cloud unreachable — local only" : "This device only",
@@ -82,13 +142,30 @@ class LocalStore {
   }
 
   onGoals(cb) {
-    this._goals = cb;
-    cb(loadJSON(GOALS_KEY, DEFAULT_GOALS));
+    this._cbs.goals = cb;
+    cb({ ...DEFAULT_GOALS, ...loadJSON(GOALS_KEY, {}) });
   }
 
   onFoods(cb) {
-    this._foods = cb;
-    cb(loadJSON(PRESETS_KEY, DEFAULT_FOODS));
+    this._cbs.foods = cb;
+    cb(this._foods());
+  }
+
+  onRecent(cb) {
+    this._cbs.recent = cb;
+    cb(loadJSON(RECENT_KEY, []));
+  }
+
+  _foods() {
+    return loadJSON(PRESETS_KEY, DEFAULT_FOODS).map(normalizeFood).filter(Boolean);
+  }
+  _emitFoods() {
+    if (this._cbs.foods) this._cbs.foods(this._foods());
+  }
+  _emitDay(dayKey) {
+    if (this._day.cb && this._day.key === dayKey) {
+      this._day.cb(loadJSON(dayStorageKey(dayKey), []));
+    }
   }
 
   watchDay(dayKey, cb) {
@@ -99,55 +176,84 @@ class LocalStore {
     };
   }
 
-  _emitDay(dayKey) {
-    if (this._day.cb && this._day.key === dayKey) {
-      this._day.cb(loadJSON(dayStorageKey(dayKey), []));
-    }
+  async getDayEntries(dayKey) {
+    return loadJSON(dayStorageKey(dayKey), []);
   }
 
   async setGoals(goals) {
     saveJSON(GOALS_KEY, goals);
-    if (this._goals) this._goals(goals);
+    if (this._cbs.goals) this._cbs.goals(goals);
   }
 
   async addEntry(dayKey, entry) {
+    return this.addEntries(dayKey, [entry]);
+  }
+
+  async addEntries(dayKey, entries) {
+    if (entries.length === 0) return 0;
     const list = loadJSON(dayStorageKey(dayKey), []);
-    list.push({ ...entry, id: entry.id || newId("e"), at: entry.at || Date.now() });
+    for (const e of entries) list.push({ id: newId("e"), ...entryPayload(e) });
     saveJSON(dayStorageKey(dayKey), list);
     this._emitDay(dayKey);
+    return entries.length;
   }
 
   async removeEntry(dayKey, entryId) {
-    const list = loadJSON(dayStorageKey(dayKey), []).filter((e) => e.id !== entryId);
-    saveJSON(dayStorageKey(dayKey), list);
+    saveJSON(dayStorageKey(dayKey), loadJSON(dayStorageKey(dayKey), []).filter((e) => e.id !== entryId));
     this._emitDay(dayKey);
+  }
+
+  async copyDay(fromKey, toKey) {
+    const src = await this.getDayEntries(fromKey);
+    if (src.length === 0) return 0;
+    const now = Date.now();
+    const time = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    return this.addEntries(toKey, src.map((e) => ({ ...e, at: now, time })));
   }
 
   async addFood(food) {
     const foods = loadJSON(PRESETS_KEY, DEFAULT_FOODS);
-    foods.push({ ...food, id: food.id || newId("p"), logCount: 1, lastUsed: Date.now() });
+    const id = food.id || newId("p");
+    foods.push({ id, ...foodPayload({ ...food, logCount: 1 }) });
     saveJSON(PRESETS_KEY, foods);
-    if (this._foods) this._foods(foods);
+    this._emitFoods();
+    return id;
+  }
+
+  async updateFood(id, patch) {
+    saveJSON(
+      PRESETS_KEY,
+      loadJSON(PRESETS_KEY, DEFAULT_FOODS).map((f) =>
+        f.id === id ? { id, ...foodPayload({ ...normalizeFood(f), ...patch }) } : f
+      )
+    );
+    this._emitFoods();
   }
 
   async deleteFood(id) {
-    const foods = loadJSON(PRESETS_KEY, DEFAULT_FOODS).filter((f) => f.id !== id);
-    saveJSON(PRESETS_KEY, foods);
-    if (this._foods) this._foods(foods);
+    saveJSON(PRESETS_KEY, loadJSON(PRESETS_KEY, DEFAULT_FOODS).filter((f) => f.id !== id));
+    this._emitFoods();
   }
 
   async bumpFood(id) {
-    const foods = loadJSON(PRESETS_KEY, DEFAULT_FOODS).map((f) =>
-      f.id === id ? { ...f, logCount: (f.logCount || 0) + 1, lastUsed: Date.now() } : f
+    saveJSON(
+      PRESETS_KEY,
+      loadJSON(PRESETS_KEY, DEFAULT_FOODS).map((f) =>
+        f.id === id ? { ...f, logCount: (Number(f.logCount) || 0) + 1, lastUsed: Date.now() } : f
+      )
     );
-    saveJSON(PRESETS_KEY, foods);
-    if (this._foods) this._foods(foods);
+    this._emitFoods();
+  }
+
+  async noteRecent(food) {
+    const next = mergeRecent(loadJSON(RECENT_KEY, []), food);
+    saveJSON(RECENT_KEY, next);
+    if (this._cbs.recent) this._cbs.recent(next);
   }
 
   async signInWithGoogle() {
     throw new Error("Add your Firebase config first.");
   }
-
   currentUser() {
     return null;
   }
@@ -160,19 +266,23 @@ class LocalStore {
 class CloudStore {
   constructor(fb) {
     this.mode = "cloud";
+    this.fellBack = false;
     this.fb = fb;
     this.uid = null;
-    this._status = null;
+    this._statusCb = null;
     this._statusState = { mode: "cloud", label: "Connecting", tone: "muted" };
+    this._userSubs = [];
+    this._userData = {};
+    this._userLoaded = false;
   }
 
   _setStatus(label, tone) {
     this._statusState = { mode: "cloud", label, tone };
-    if (this._status) this._status(this._statusState);
+    if (this._statusCb) this._statusCb(this._statusState);
   }
 
   onStatus(cb) {
-    this._status = cb;
+    this._statusCb = cb;
     cb(this._statusState);
   }
 
@@ -199,9 +309,13 @@ class CloudStore {
 
     window.addEventListener("online", () => this._setStatus("Synced", "ok"));
     window.addEventListener("offline", () => this._setStatus("Offline — saving locally", "warn"));
-    this._setStatus(navigator.onLine ? "Synced" : "Offline — saving locally", navigator.onLine ? "ok" : "warn");
+    this._setStatus(
+      navigator.onLine ? "Synced" : "Offline — saving locally",
+      navigator.onLine ? "ok" : "warn"
+    );
 
     await this._bootstrapAndMigrate();
+    this._startUserListener();
     return { mode: "cloud", uid: this.uid };
   }
 
@@ -233,6 +347,7 @@ class CloudStore {
       this._userRef,
       {
         goals: localGoals || DEFAULT_GOALS,
+        recent: [],
         createdAt: snap.exists() ? snap.data().createdAt || serverTimestamp() : serverTimestamp(),
         migratedAt: serverTimestamp(),
       },
@@ -240,32 +355,14 @@ class CloudStore {
     );
 
     for (const f of localFoods || DEFAULT_FOODS) {
-      const ref = doc(db, "users", this.uid, "foods", f.id || newId("p"));
-      batch.set(ref, {
-        name: f.name,
-        cal: Number(f.cal) || 0,
-        pro: Number(f.pro) || 0,
-        carb: Number(f.carb) || 0,
-        fat: Number(f.fat) || 0,
-        logCount: Number(f.logCount) || 0,
-        lastUsed: Number(f.lastUsed) || Date.now(),
-      });
+      batch.set(doc(db, "users", this.uid, "foods", f.id || newId("p")), foodPayload(f));
     }
 
     let writes = 0;
     for (const dayKey of dayKeys) {
       for (const e of loadJSON(dayStorageKey(dayKey), [])) {
         if (writes >= 400) break; // stay under the 500-op batch limit
-        const ref = doc(db, "users", this.uid, "days", dayKey, "entries", e.id || newId("e"));
-        batch.set(ref, {
-          name: e.name,
-          cal: Number(e.cal) || 0,
-          pro: Number(e.pro) || 0,
-          carb: Number(e.carb) || 0,
-          fat: Number(e.fat) || 0,
-          time: e.time || "",
-          at: Number(e.at) || Date.now(),
-        });
+        batch.set(doc(db, "users", this.uid, "days", dayKey, "entries", e.id || newId("e")), entryPayload(e));
         writes++;
       }
     }
@@ -274,19 +371,38 @@ class CloudStore {
     console.info(`Migrated ${dayKeys.length} day(s) and ${(localFoods || DEFAULT_FOODS).length} food(s) to Firestore.`);
   }
 
-  onGoals(cb) {
+  // Goals and the recent list live on the same document, so they share one
+  // listener rather than paying for two.
+  _startUserListener() {
     this.fb.onSnapshot(
       this._userRef,
-      (snap) => cb({ ...DEFAULT_GOALS, ...(snap.data()?.goals || {}) }),
-      (err) => console.error("goals listener", err)
+      (snap) => {
+        this._userData = snap.data() || {};
+        this._userLoaded = true;
+        for (const sub of this._userSubs) sub(this._userData);
+      },
+      (err) => console.error("user listener", err)
     );
+  }
+
+  _subscribeUser(fn) {
+    this._userSubs.push(fn);
+    if (this._userLoaded) fn(this._userData);
+  }
+
+  onGoals(cb) {
+    this._subscribeUser((d) => cb({ ...DEFAULT_GOALS, ...(d.goals || {}) }));
+  }
+
+  onRecent(cb) {
+    this._subscribeUser((d) => cb(Array.isArray(d.recent) ? d.recent : []));
   }
 
   onFoods(cb) {
     const { onSnapshot, collection, db } = this.fb;
     onSnapshot(
       collection(db, "users", this.uid, "foods"),
-      (qs) => cb(qs.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      (qs) => cb(qs.docs.map((d) => normalizeFood({ id: d.id, ...d.data() })).filter(Boolean)),
       (err) => console.error("foods listener", err)
     );
   }
@@ -300,22 +416,34 @@ class CloudStore {
     );
   }
 
+  async getDayEntries(dayKey) {
+    const { getDocs, collection, query, orderBy, db } = this.fb;
+    const qs = await getDocs(
+      query(collection(db, "users", this.uid, "days", dayKey, "entries"), orderBy("at"))
+    );
+    return qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+  }
+
   async setGoals(goals) {
     await this.fb.setDoc(this._userRef, { goals }, { merge: true });
   }
 
   async addEntry(dayKey, entry) {
     const { doc, setDoc, db } = this.fb;
-    const id = entry.id || newId("e");
-    await setDoc(doc(db, "users", this.uid, "days", dayKey, "entries", id), {
-      name: entry.name,
-      cal: Number(entry.cal) || 0,
-      pro: Number(entry.pro) || 0,
-      carb: Number(entry.carb) || 0,
-      fat: Number(entry.fat) || 0,
-      time: entry.time || "",
-      at: entry.at || Date.now(),
-    });
+    await setDoc(doc(db, "users", this.uid, "days", dayKey, "entries", newId("e")), entryPayload(entry));
+    return 1;
+  }
+
+  async addEntries(dayKey, entries) {
+    if (entries.length === 0) return 0;
+    const { doc, writeBatch, db } = this.fb;
+    const batch = writeBatch(db);
+    const slice = entries.slice(0, 400);
+    for (const e of slice) {
+      batch.set(doc(db, "users", this.uid, "days", dayKey, "entries", newId("e")), entryPayload(e));
+    }
+    await batch.commit();
+    return slice.length;
   }
 
   async removeEntry(dayKey, entryId) {
@@ -323,18 +451,27 @@ class CloudStore {
     await deleteDoc(doc(db, "users", this.uid, "days", dayKey, "entries", entryId));
   }
 
+  async copyDay(fromKey, toKey) {
+    const src = await this.getDayEntries(fromKey);
+    if (src.length === 0) return 0;
+    const now = Date.now();
+    const time = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    return this.addEntries(toKey, src.map((e) => ({ ...e, at: now, time })));
+  }
+
   async addFood(food) {
     const { doc, setDoc, db } = this.fb;
     const id = food.id || newId("p");
-    await setDoc(doc(db, "users", this.uid, "foods", id), {
-      name: food.name,
-      cal: Number(food.cal) || 0,
-      pro: Number(food.pro) || 0,
-      carb: Number(food.carb) || 0,
-      fat: Number(food.fat) || 0,
-      logCount: 1,
-      lastUsed: Date.now(),
-    });
+    await setDoc(doc(db, "users", this.uid, "foods", id), foodPayload({ ...food, logCount: 1 }));
+    return id;
+  }
+
+  async updateFood(id, patch) {
+    const { doc, getDoc, setDoc, db } = this.fb;
+    const ref = doc(db, "users", this.uid, "foods", id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return;
+    await setDoc(ref, foodPayload({ ...normalizeFood(snap.data()), ...patch }));
   }
 
   async deleteFood(id) {
@@ -354,6 +491,11 @@ class CloudStore {
     }
   }
 
+  async noteRecent(food) {
+    const next = mergeRecent(this._userData.recent || [], food);
+    await this.fb.setDoc(this._userRef, { recent: next }, { merge: true });
+  }
+
   // Anonymous accounts die with the browser's storage. Linking to Google keeps
   // the same uid and therefore the same data, on any device.
   async signInWithGoogle() {
@@ -364,7 +506,6 @@ class CloudStore {
       this._setStatus("Synced to " + (cred.user.email || "Google"), "ok");
       return cred.user;
     } catch (e) {
-      // Already linked, or that Google account owns a different uid already.
       if (
         e.code === "auth/credential-already-in-use" ||
         e.code === "auth/email-already-in-use" ||
@@ -418,6 +559,7 @@ async function loadFirebase() {
     query: fsMod.query,
     orderBy: fsMod.orderBy,
     getDoc: fsMod.getDoc,
+    getDocs: fsMod.getDocs,
     setDoc: fsMod.setDoc,
     updateDoc: fsMod.updateDoc,
     deleteDoc: fsMod.deleteDoc,
