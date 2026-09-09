@@ -1,0 +1,53 @@
+rules_version = '2';
+
+// Deploy with:  firebase deploy --only firestore:rules
+// Or paste into Firebase Console -> Firestore Database -> Rules -> Publish.
+//
+// Test in the console's Rules Playground before trusting them:
+//   Simulate a read of users/SOME_UID/days/2026-09-09/entries/x
+//   with Authentication on and a *different* uid. It must be denied.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // Everything personal lives under the user's own document.
+    // Goals sit on users/{uid}; foods and days hang off it as subcollections.
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+
+      match /{rest=**} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // Shared barcode cache. Any signed-in user can read it, and can add a
+    // barcode that isn't there yet, so a product only gets looked up once ever.
+    //
+    // Caveat worth knowing: anonymous auth means "any signed-in user" is
+    // effectively anybody who loads the site, so a stranger could write junk
+    // here. That is an acceptable trade for a personal app. If you ever share
+    // the URL widely, move these writes into a Cloud Function and set
+    // `allow write: if false` below.
+    match /barcodes/{upc} {
+      allow read: if request.auth != null;
+
+      allow create, update: if request.auth != null
+        && upc.matches('^[0-9]{8,14}$')
+        && request.resource.data.keys().hasOnly([
+             'name', 'brand', 'per100g', 'perServing',
+             'servingSize', 'servingUnit', 'source', 'updatedAt'
+           ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 200;
+
+      allow delete: if false;
+    }
+
+    // Anything not matched above is denied. Do not add a catch-all.
+  }
+}

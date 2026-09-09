@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#101314">
 <title>Fuel Log</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,8 +38,14 @@
 
   header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
   header h1 { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  header .head-right { display: flex; align-items: center; gap: 10px; }
   header button.gear { background: none; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; padding: 2px; }
   header button.gear:hover { color: var(--text); }
+
+  .sync { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); }
+  .sync .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex: none; }
+  .sync.ok .dot { background: var(--sage); }
+  .sync.warn .dot { background: var(--amber); }
 
   .day-nav {
     display: flex; align-items: center; justify-content: space-between;
@@ -48,7 +57,7 @@
     padding: 6px 10px; border-radius: 8px;
   }
   .day-nav button.arrow:hover { background: var(--surface-raised); }
-  .day-nav .day-label { font-size: 13.5px; font-weight: 500; text-align: center; flex: 1; }
+  .day-nav .day-label { font-size: 13.5px; font-weight: 500; text-align: center; flex: 1; position: relative; cursor: pointer; }
   .day-nav .day-label .rel { color: var(--text-muted); font-size: 11px; display: block; margin-top: 1px; }
   .day-nav button.today-btn {
     background: none; border: 1px solid var(--line); color: var(--text-muted); font-size: 11px;
@@ -57,7 +66,7 @@
   .day-nav button.today-btn:hover { color: var(--text); }
   .day-nav input[type="date"] {
     background: none; border: none; color: transparent; position: absolute;
-    width: 1px; height: 1px; opacity: 0;
+    left: 50%; bottom: 0; width: 1px; height: 1px; opacity: 0;
   }
 
   .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
@@ -111,6 +120,7 @@
   }
   .edit-mode .preset .del { display: block; }
   .edit-mode .preset { cursor: default; }
+  .grid-note { grid-column: 1 / -1; color: var(--text-muted); font-size: 13px; padding: 16px 4px; text-align: center; border: 1px dashed var(--line); border-radius: 12px; }
 
   .btn { font-family: inherit; font-size: 13px; font-weight: 500; border-radius: 8px; padding: 9px 14px; border: none; cursor: pointer; }
   .btn-primary { background: var(--amber); color: #1a1305; }
@@ -161,9 +171,14 @@
   .goals-form { display: none; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 18px; }
   .goals-form.open { display: block; }
   .goals-form .row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .goals-form .row label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px; }
 
   .settings-modal .field small { color: var(--text-muted); font-size: 11px; display: block; margin-top: 4px; line-height: 1.4; }
   .settings-modal a { color: var(--amber); }
+  .settings-block { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 14px; }
+  .settings-block h3 { font-family: 'Space Grotesk', sans-serif; font-size: 13px; font-weight: 500; margin: 0 0 4px; }
+  .settings-block p { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; margin: 0 0 10px; }
+  .settings-block code { font-size: 10.5px; color: var(--text-muted); }
 
   .log-list { display: flex; flex-direction: column; gap: 6px; }
   .log-empty { color: var(--text-muted); font-size: 13px; padding: 18px 4px; text-align: center; border: 1px dashed var(--line); border-radius: 12px; }
@@ -179,23 +194,31 @@
   .log-item .rm:hover { color: var(--danger); }
 
   .fab-row { display: flex; gap: 8px; margin-top: 10px; }
+
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
 </style>
 </head>
 <body>
 <div id="app">
   <header>
     <h1>Fuel Log</h1>
-    <button class="gear" onclick="openSettingsModal()" title="Settings">&#9881;</button>
+    <div class="head-right">
+      <span class="sync" id="syncPill"><span class="dot"></span><span id="syncLabel">Starting</span></span>
+      <button class="gear" onclick="openSettingsModal()" title="Settings">&#9881;</button>
+    </div>
   </header>
 
   <div class="day-nav">
-    <button class="arrow" onclick="shiftDay(-1)">&#8249;</button>
-    <div class="day-label" onclick="document.getElementById('dateJump').showPicker && document.getElementById('dateJump').showPicker()">
+    <button class="arrow" onclick="shiftDay(-1)" aria-label="Previous day">&#8249;</button>
+    <div class="day-label" onclick="openDatePicker()">
       <span id="dayLabelMain">Today</span>
       <span class="rel" id="dayLabelSub"></span>
-      <input type="date" id="dateJump" onchange="jumpToDate(this.value)">
+      <input type="date" id="dateJump" onchange="jumpToDate(this.value)" tabindex="-1">
     </div>
-    <button class="arrow" onclick="shiftDay(1)" id="nextDayBtn">&#8250;</button>
+    <button class="arrow" onclick="shiftDay(1)" aria-label="Next day">&#8250;</button>
     <button class="today-btn" id="todayJumpBtn" onclick="goToToday()" style="display:none;">Today</button>
   </div>
 
@@ -221,12 +244,12 @@
 
   <div class="goals-form" id="goalsForm">
     <div class="row">
-      <div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Calorie goal</label><input type="number" inputmode="numeric" id="goalCalInput" placeholder="2700"></div>
-      <div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Protein goal (g)</label><input type="number" inputmode="numeric" id="goalProInput" placeholder="155"></div>
+      <div style="flex:1"><label for="goalCalInput">Calorie goal</label><input type="number" inputmode="numeric" id="goalCalInput" placeholder="2700"></div>
+      <div style="flex:1"><label for="goalProInput">Protein goal (g)</label><input type="number" inputmode="numeric" id="goalProInput" placeholder="155"></div>
     </div>
     <div class="row">
-      <div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Carb goal (g, optional)</label><input type="number" inputmode="numeric" id="goalCarbInput" placeholder="0"></div>
-      <div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Fat goal (g, optional)</label><input type="number" inputmode="numeric" id="goalFatInput" placeholder="0"></div>
+      <div style="flex:1"><label for="goalCarbInput">Carb goal (g, optional)</label><input type="number" inputmode="numeric" id="goalCarbInput" placeholder="0"></div>
+      <div style="flex:1"><label for="goalFatInput">Fat goal (g, optional)</label><input type="number" inputmode="numeric" id="goalFatInput" placeholder="0"></div>
     </div>
     <button class="btn btn-primary btn-block" onclick="saveGoals()">Save goals</button>
   </div>
@@ -258,15 +281,15 @@
 
     <div class="divider-text">or enter manually</div>
 
-    <div class="field"><label>Name</label><input id="mName" placeholder="e.g. Chick-fil-A sandwich"></div>
+    <div class="field"><label for="mName">Name</label><input id="mName" placeholder="e.g. Chick-fil-A sandwich"></div>
     <div class="macro-grid">
-      <div class="field"><label>Calories</label><input id="mCal" type="number" inputmode="numeric" placeholder="0"></div>
-      <div class="field"><label>Protein (g)</label><input id="mPro" type="number" inputmode="numeric" placeholder="0"></div>
-      <div class="field"><label>Carbs (g)</label><input id="mCarb" type="number" inputmode="numeric" placeholder="0"></div>
+      <div class="field"><label for="mCal">Calories</label><input id="mCal" type="number" inputmode="decimal" placeholder="0"></div>
+      <div class="field"><label for="mPro">Protein (g)</label><input id="mPro" type="number" inputmode="decimal" placeholder="0"></div>
+      <div class="field"><label for="mCarb">Carbs (g)</label><input id="mCarb" type="number" inputmode="decimal" placeholder="0"></div>
     </div>
-    <div class="field" style="width:33%"><label>Fat (g)</label><input id="mFat" type="number" inputmode="numeric" placeholder="0"></div>
+    <div class="field" style="width:33%"><label for="mFat">Fat (g)</label><input id="mFat" type="number" inputmode="decimal" placeholder="0"></div>
     <div class="check-row">
-      <input type="checkbox" id="mSaveSpot" checked>
+      <input type="checkbox" id="mSaveSpot">
       <label for="mSaveSpot">Save as a quick-add spot for next time</label>
     </div>
     <div class="actions">
@@ -281,109 +304,141 @@
     <h2>Settings</h2>
     <div class="sub">USDA FoodData Central connects the search bar to a real nutrition database.</div>
     <div class="field">
-      <label>USDA API key</label>
+      <label for="usdaKeyInput">USDA API key</label>
       <input id="usdaKeyInput" placeholder="Paste your key here">
-      <small>Free, instant, no payment info required. Get one at <a href="https://fdc.nal.usda.gov/api-key-signup.html" target="_blank">fdc.nal.usda.gov/api-key-signup.html</a>, then paste it here. Stored only in this browser.</small>
+      <small>Free, instant, no payment info required. Get one at <a href="https://fdc.nal.usda.gov/api-key-signup.html" target="_blank" rel="noopener">fdc.nal.usda.gov/api-key-signup.html</a>, then paste it here. Stored only in this browser.</small>
     </div>
     <div class="actions">
       <button class="btn btn-primary" style="flex:1" onclick="saveUsdaKey()">Save key</button>
       <button class="btn btn-ghost" onclick="closeSettingsModal()">Close</button>
     </div>
+
+    <div class="settings-block" id="accountBlock">
+      <h3>Account</h3>
+      <p id="accountText">Checking…</p>
+      <button class="btn btn-ghost btn-block" id="linkGoogleBtn" onclick="connectGoogle()" style="display:none;">Keep my data — sign in with Google</button>
+    </div>
   </div>
 </div>
 
-<script>
-const STORAGE_PREFIX = 'fuellog:';
-const PRESETS_KEY = STORAGE_PREFIX + 'presets';
-const GOALS_KEY = STORAGE_PREFIX + 'goals';
-const USDA_KEY_STORAGE = STORAGE_PREFIX + 'usdaKey';
+<script type="module">
+import { createStore, DEFAULT_GOALS } from './store.js';
 
+/* ---------- state ---------- */
+
+let store = null;
+let ready = false;
+let viewDate = startOfDay(new Date());
+let foods = [];
+let log = [];
+let goals = { ...DEFAULT_GOALS };
+let editMode = false;
+let unwatchDay = null;
+let usdaResults = {};
+
+const USDA_KEY_STORAGE = 'fuellog:usdaKey';
+
+/* ---------- dates ---------- */
+
+function startOfDay(d) { const n = new Date(d); n.setHours(0,0,0,0); return n; }
 function dateKey(d) {
   return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
 }
-function startOfDay(d) { const n = new Date(d); n.setHours(0,0,0,0); return n; }
-function logKeyFor(d) { return STORAGE_PREFIX + 'log:' + dateKey(d); }
-
-let viewDate = startOfDay(new Date());
-let presets = [];
-let log = [];
-let goals = { calories: 2700, protein: 155, carbs: 0, fat: 0 };
-let editMode = false;
-
-const DEFAULT_PRESETS = [
-  { id: 'p1', name: 'Rand Dining — chicken bowl', cal: 650, pro: 45, carb: 60, fat: 18 },
-  { id: 'p2', name: 'Rand Dining — omelet + toast', cal: 520, pro: 30, carb: 40, fat: 22 },
-  { id: 'p3', name: 'Publix — rotisserie chicken + rice', cal: 600, pro: 50, carb: 55, fat: 15 },
-  { id: 'p4', name: 'Publix — protein shake', cal: 250, pro: 30, carb: 12, fat: 6 },
-  { id: 'p5', name: 'Commons — pasta station', cal: 700, pro: 25, carb: 95, fat: 20 },
-  { id: 'p6', name: 'Protein bar', cal: 220, pro: 20, carb: 22, fat: 7 },
-];
-
-function loadJSON(key, fallback) {
-  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
-  catch { return fallback; }
-}
-function saveJSON(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); }
-  catch (e) { console.error('save failed', key, e); }
-}
-
-function loadAll() {
-  presets = loadJSON(PRESETS_KEY, DEFAULT_PRESETS);
-  goals = loadJSON(GOALS_KEY, goals);
-  loadLogForViewDate();
-  render();
-}
-function loadLogForViewDate() {
-  log = loadJSON(logKeyFor(viewDate), []);
-}
-function saveLogForViewDate() {
-  saveJSON(logKeyFor(viewDate), log);
-}
-
-function shiftDay(delta) {
-  const d = new Date(viewDate);
-  d.setDate(d.getDate() + delta);
-  viewDate = startOfDay(d);
-  loadLogForViewDate();
-  render();
-}
-function goToToday() {
-  viewDate = startOfDay(new Date());
-  loadLogForViewDate();
-  render();
-}
-function jumpToDate(value) {
-  if (!value) return;
-  const [y,m,dd] = value.split('-').map(Number);
-  viewDate = startOfDay(new Date(y, m-1, dd));
-  loadLogForViewDate();
-  render();
-}
-
 function formatDayLabel(d) {
   const today = startOfDay(new Date());
   const diffDays = Math.round((d - today) / 86400000);
-  if (diffDays === 0) return { main: 'Today', sub: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) };
-  if (diffDays === -1) return { main: 'Yesterday', sub: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) };
-  if (diffDays === 1) return { main: 'Tomorrow', sub: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) };
-  return { main: d.toLocaleDateString('en-US', { weekday: 'long' }), sub: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) };
+  const long = { weekday: 'long', month: 'short', day: 'numeric' };
+  if (diffDays === 0) return { main: 'Today', sub: d.toLocaleDateString('en-US', long) };
+  if (diffDays === -1) return { main: 'Yesterday', sub: d.toLocaleDateString('en-US', long) };
+  if (diffDays === 1) return { main: 'Tomorrow', sub: d.toLocaleDateString('en-US', long) };
+  return {
+    main: d.toLocaleDateString('en-US', { weekday: 'long' }),
+    sub: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+  };
+}
+
+/* ---------- boot ---------- */
+
+async function boot() {
+  render();
+  store = await createStore();
+
+  store.onStatus(renderSyncPill);
+  store.onGoals((g) => { goals = g; render(); });
+  store.onFoods((f) => { foods = f; render(); });
+  watchCurrentDay();
+
+  ready = true;
+  render();
+  renderAccountBlock();
+}
+
+function watchCurrentDay() {
+  if (unwatchDay) unwatchDay();
+  log = [];
+  render();
+  const key = dateKey(viewDate);
+  unwatchDay = store.watchDay(key, (entries) => {
+    if (dateKey(viewDate) !== key) return; // a stale snapshot from a day we left
+    log = entries;
+    render();
+  });
+}
+
+/* ---------- rendering ---------- */
+
+const n = (v) => Math.round(Number(v) || 0);
+
+function renderSyncPill(status) {
+  const pill = document.getElementById('syncPill');
+  pill.className = 'sync' + (status.tone === 'ok' ? ' ok' : status.tone === 'warn' ? ' warn' : '');
+  document.getElementById('syncLabel').textContent = status.label;
+}
+
+function renderAccountBlock() {
+  const text = document.getElementById('accountText');
+  const btn = document.getElementById('linkGoogleBtn');
+  if (!store || store.mode === 'local') {
+    text.textContent = store && store.fellBack
+      ? 'Firebase is configured but did not start, so this session is saving locally. Check the browser console for the reason — usually unpublished rules or anonymous sign-in still switched off.'
+      : 'Running on this device only. Paste your Firebase config into firebase-config.js to sync across your iPhone, iPad and laptop.';
+    btn.style.display = 'none';
+    return;
+  }
+  const user = store.currentUser();
+  const linked = user && !user.isAnonymous;
+  if (linked) {
+    text.textContent = 'Signed in as ' + (user.email || user.uid) + '. Your log follows you to any device.';
+    btn.style.display = 'none';
+  } else {
+    text.textContent = 'Your data is saved to the cloud under a temporary account. Clearing Safari data would cut you off from it. Sign in to make it permanent.';
+    btn.style.display = 'block';
+  }
+}
+
+function sortedFoods() {
+  return foods.slice().sort((a, b) => {
+    const d = (b.logCount || 0) - (a.logCount || 0);
+    return d !== 0 ? d : String(a.name).localeCompare(String(b.name));
+  });
 }
 
 function render() {
   const label = formatDayLabel(viewDate);
   document.getElementById('dayLabelMain').textContent = label.main;
   document.getElementById('dayLabelSub').textContent = label.sub;
+
   const isToday = dateKey(viewDate) === dateKey(new Date());
   document.getElementById('todayJumpBtn').style.display = isToday ? 'none' : 'inline-block';
-  document.getElementById('nextDayBtn').disabled = false;
   document.getElementById('logSectionTitle').textContent = isToday ? "Today's log" : label.main + "'s log";
-  document.getElementById('modalDaySub').textContent = isToday ? 'Adding to today' : 'Adding to ' + label.main.toLowerCase() + ' (' + label.sub + ')';
+  document.getElementById('modalDaySub').textContent = isToday
+    ? 'Adding to today'
+    : 'Adding to ' + label.main.toLowerCase() + ' (' + label.sub + ')';
 
-  const totalCal = log.reduce((s, e) => s + e.cal, 0);
-  const totalPro = log.reduce((s, e) => s + e.pro, 0);
-  const totalCarb = log.reduce((s, e) => s + (e.carb || 0), 0);
-  const totalFat = log.reduce((s, e) => s + (e.fat || 0), 0);
+  const totalCal = log.reduce((s, e) => s + (Number(e.cal) || 0), 0);
+  const totalPro = log.reduce((s, e) => s + (Number(e.pro) || 0), 0);
+  const totalCarb = log.reduce((s, e) => s + (Number(e.carb) || 0), 0);
+  const totalFat = log.reduce((s, e) => s + (Number(e.fat) || 0), 0);
 
   const calLeft = goals.calories - totalCal;
   const proLeft = goals.protein - totalPro;
@@ -391,45 +446,53 @@ function render() {
   document.getElementById('calCard').classList.toggle('over', calLeft < 0);
   document.getElementById('proCard').classList.toggle('over', proLeft < 0);
 
-  document.getElementById('calLeft').textContent = Math.abs(calLeft) + (calLeft < 0 ? ' over' : '');
-  document.getElementById('calOf').textContent = 'of ' + goals.calories + ' · eaten ' + totalCal;
-  document.getElementById('calBar').style.width = Math.min(100, (totalCal / goals.calories) * 100) + '%';
+  document.getElementById('calLeft').textContent = n(Math.abs(calLeft)) + (calLeft < 0 ? ' over' : '');
+  document.getElementById('calOf').textContent = 'of ' + goals.calories + ' · eaten ' + n(totalCal);
+  document.getElementById('calBar').style.width = Math.min(100, (totalCal / (goals.calories || 1)) * 100) + '%';
 
-  document.getElementById('proLeft').textContent = Math.abs(proLeft) + 'g' + (proLeft < 0 ? ' over' : '');
-  document.getElementById('proOf').textContent = 'of ' + goals.protein + 'g · eaten ' + totalPro + 'g';
-  document.getElementById('proBar').style.width = Math.min(100, (totalPro / goals.protein) * 100) + '%';
+  document.getElementById('proLeft').textContent = n(Math.abs(proLeft)) + 'g' + (proLeft < 0 ? ' over' : '');
+  document.getElementById('proOf').textContent = 'of ' + goals.protein + 'g · eaten ' + n(totalPro) + 'g';
+  document.getElementById('proBar').style.width = Math.min(100, (totalPro / (goals.protein || 1)) * 100) + '%';
 
-  document.getElementById('carbsVal').textContent = totalCarb + 'g' + (goals.carbs > 0 ? ' / ' + goals.carbs + 'g' : '');
-  document.getElementById('fatVal').textContent = totalFat + 'g' + (goals.fat > 0 ? ' / ' + goals.fat + 'g' : '');
+  document.getElementById('carbsVal').textContent = n(totalCarb) + 'g' + (goals.carbs > 0 ? ' / ' + goals.carbs + 'g' : '');
+  document.getElementById('fatVal').textContent = n(totalFat) + 'g' + (goals.fat > 0 ? ' / ' + goals.fat + 'g' : '');
 
-  document.getElementById('goalCalInput').value = goals.calories;
-  document.getElementById('goalProInput').value = goals.protein;
-  document.getElementById('goalCarbInput').value = goals.carbs || '';
-  document.getElementById('goalFatInput').value = goals.fat || '';
+  if (!document.getElementById('goalsForm').classList.contains('open')) {
+    document.getElementById('goalCalInput').value = goals.calories;
+    document.getElementById('goalProInput').value = goals.protein;
+    document.getElementById('goalCarbInput').value = goals.carbs || '';
+    document.getElementById('goalFatInput').value = goals.fat || '';
+  }
 
   const grid = document.getElementById('presetsGrid');
   grid.className = 'presets' + (editMode ? ' edit-mode' : '');
-  grid.innerHTML = presets.map(p => `
-    <div class="preset" role="button" tabindex="0" onclick="${editMode ? '' : `addFromPreset('${p.id}')`}">
-      <button class="del" onclick="event.stopPropagation(); deletePreset('${p.id}')">×</button>
-      <span class="name">${escapeHtml(p.name)}</span>
-      <span class="tags"><span class="tag c">${p.cal} cal</span><span class="tag p">${p.pro}g pro</span></span>
-    </div>
-  `).join('');
+  if (!ready) {
+    grid.innerHTML = '<div class="grid-note">Loading your foods…</div>';
+  } else if (foods.length === 0) {
+    grid.innerHTML = '<div class="grid-note">No quick adds yet. Log a food and tick “save as a quick-add spot”.</div>';
+  } else {
+    grid.innerHTML = sortedFoods().map((p) => `
+      <div class="preset" role="button" tabindex="0" onclick="${editMode ? '' : `addFromPreset('${p.id}')`}">
+        <button class="del" onclick="event.stopPropagation(); deletePreset('${p.id}')" aria-label="Delete ${escapeAttr(p.name)}">×</button>
+        <span class="name">${escapeHtml(p.name)}</span>
+        <span class="tags"><span class="tag c">${n(p.cal)} cal</span><span class="tag p">${n(p.pro)}g pro</span></span>
+      </div>
+    `).join('');
+  }
 
   const listEl = document.getElementById('logList');
   if (log.length === 0) {
     listEl.innerHTML = '<div class="log-empty">Nothing logged ' + (isToday ? 'yet today.' : 'on this day.') + '</div>';
   } else {
-    listEl.innerHTML = log.slice().reverse().map(e => `
+    listEl.innerHTML = log.slice().reverse().map((e) => `
       <div class="log-item">
         <div class="left">
           <span class="name">${escapeHtml(e.name)}</span>
-          <span class="time">${e.time}</span>
+          <span class="time">${escapeHtml(e.time || '')}</span>
         </div>
         <div class="right">
-          <span class="macros"><span class="c">${e.cal} cal</span> · <span class="p">${e.pro}g P</span> · ${e.carb||0}g C · ${e.fat||0}g F</span>
-          <button class="rm" onclick="removeLogEntry('${e.id}')">×</button>
+          <span class="macros"><span class="c">${n(e.cal)} cal</span> · <span class="p">${n(e.pro)}g P</span> · ${n(e.carb)}g C · ${n(e.fat)}g F</span>
+          <button class="rm" onclick="removeLogEntry('${e.id}')" aria-label="Remove ${escapeAttr(e.name)}">×</button>
         </div>
       </div>
     `).join('');
@@ -438,26 +501,80 @@ function render() {
 
 function escapeHtml(str) {
   const div = document.createElement('div');
-  div.textContent = str;
+  div.textContent = String(str ?? '');
   return div.innerHTML;
 }
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, '&quot;');
+}
 
-function addFromPreset(id) {
-  const p = presets.find(x => x.id === id);
+/* ---------- day navigation ---------- */
+
+function shiftDay(delta) {
+  const d = new Date(viewDate);
+  d.setDate(d.getDate() + delta);
+  viewDate = startOfDay(d);
+  watchCurrentDay();
+}
+function goToToday() {
+  viewDate = startOfDay(new Date());
+  watchCurrentDay();
+}
+function jumpToDate(value) {
+  if (!value) return;
+  const [y, m, dd] = value.split('-').map(Number);
+  viewDate = startOfDay(new Date(y, m - 1, dd));
+  watchCurrentDay();
+}
+function openDatePicker() {
+  const el = document.getElementById('dateJump');
+  el.value = dateKey(viewDate);
+  if (el.showPicker) el.showPicker();
+  else el.click();
+}
+
+/* ---------- logging ---------- */
+
+function nowTime() {
+  return new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+async function addFromPreset(id) {
+  const p = foods.find((x) => x.id === id);
   if (!p) return;
-  log.push({
-    id: 'e' + Date.now(), name: p.name, cal: p.cal, pro: p.pro, carb: p.carb || 0, fat: p.fat || 0,
-    time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  await store.addEntry(dateKey(viewDate), {
+    name: p.name, cal: p.cal, pro: p.pro, carb: p.carb || 0, fat: p.fat || 0, time: nowTime(), at: Date.now(),
   });
-  saveLogForViewDate();
-  render();
+  store.bumpFood(id);
 }
 
-function removeLogEntry(id) {
-  log = log.filter(e => e.id !== id);
-  saveLogForViewDate();
-  render();
+async function removeLogEntry(id) {
+  await store.removeEntry(dateKey(viewDate), id);
 }
+
+async function submitLogModal() {
+  const name = document.getElementById('mName').value.trim();
+  const cal = parseFloat(document.getElementById('mCal').value) || 0;
+  const pro = parseFloat(document.getElementById('mPro').value) || 0;
+  const carb = parseFloat(document.getElementById('mCarb').value) || 0;
+  const fat = parseFloat(document.getElementById('mFat').value) || 0;
+  if (!name || cal <= 0) {
+    document.getElementById('mName').focus();
+    return;
+  }
+
+  const saveSpot = document.getElementById('mSaveSpot').checked;
+  closeLogModal();
+
+  await store.addEntry(dateKey(viewDate), { name, cal, pro, carb, fat, time: nowTime(), at: Date.now() });
+  if (saveSpot) await store.addFood({ name, cal, pro, carb, fat });
+}
+
+async function deletePreset(id) {
+  await store.deleteFood(id);
+}
+
+/* ---------- modals, goals, settings ---------- */
 
 function openLogModal() {
   document.getElementById('modalBackdrop').classList.add('open');
@@ -467,35 +584,9 @@ function openLogModal() {
 }
 function closeLogModal() {
   document.getElementById('modalBackdrop').classList.remove('open');
-  ['mName','mCal','mPro','mCarb','mFat'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('mSaveSpot').checked = true;
+  ['mName','mCal','mPro','mCarb','mFat'].forEach((id) => { document.getElementById(id).value = ''; });
+  document.getElementById('mSaveSpot').checked = false;
   document.getElementById('searchResults').innerHTML = '';
-}
-function submitLogModal() {
-  const name = document.getElementById('mName').value.trim();
-  const cal = parseInt(document.getElementById('mCal').value) || 0;
-  const pro = parseInt(document.getElementById('mPro').value) || 0;
-  const carb = parseInt(document.getElementById('mCarb').value) || 0;
-  const fat = parseInt(document.getElementById('mFat').value) || 0;
-  if (!name || cal <= 0) return;
-
-  const entry = { id: 'e' + Date.now(), name, cal, pro, carb, fat, time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) };
-  log.push(entry);
-  saveLogForViewDate();
-
-  if (document.getElementById('mSaveSpot').checked) {
-    presets.push({ id: 'p' + Date.now(), name, cal, pro, carb, fat });
-    saveJSON(PRESETS_KEY, presets);
-  }
-
-  closeLogModal();
-  render();
-}
-
-function deletePreset(id) {
-  presets = presets.filter(p => p.id !== id);
-  saveJSON(PRESETS_KEY, presets);
-  render();
 }
 function toggleEdit() {
   editMode = !editMode;
@@ -505,18 +596,20 @@ function toggleEdit() {
 function toggleGoalsForm() {
   document.getElementById('goalsForm').classList.toggle('open');
 }
-function saveGoals() {
-  const c = parseInt(document.getElementById('goalCalInput').value) || goals.calories;
-  const p = parseInt(document.getElementById('goalProInput').value) || goals.protein;
-  const cb = parseInt(document.getElementById('goalCarbInput').value) || 0;
-  const f = parseInt(document.getElementById('goalFatInput').value) || 0;
-  goals = { calories: c, protein: p, carbs: cb, fat: f };
-  saveJSON(GOALS_KEY, goals);
-  render();
+async function saveGoals() {
+  const next = {
+    calories: parseInt(document.getElementById('goalCalInput').value) || goals.calories,
+    protein: parseInt(document.getElementById('goalProInput').value) || goals.protein,
+    carbs: parseInt(document.getElementById('goalCarbInput').value) || 0,
+    fat: parseInt(document.getElementById('goalFatInput').value) || 0,
+  };
+  document.getElementById('goalsForm').classList.remove('open');
+  await store.setGoals(next);
 }
 
 function openSettingsModal() {
   document.getElementById('usdaKeyInput').value = localStorage.getItem(USDA_KEY_STORAGE) || '';
+  renderAccountBlock();
   document.getElementById('settingsBackdrop').classList.add('open');
 }
 function closeSettingsModal() {
@@ -528,16 +621,39 @@ function saveUsdaKey() {
   else localStorage.removeItem(USDA_KEY_STORAGE);
   closeSettingsModal();
 }
-
-function pickNutrient(nutrients, matchNames) {
-  if (!nutrients) return 0;
-  for (const n of nutrients) {
-    const name = (n.nutrientName || '').toLowerCase();
-    if (matchNames.some(m => name === m)) return Math.round(n.value || 0);
+async function connectGoogle() {
+  const btn = document.getElementById('linkGoogleBtn');
+  btn.disabled = true;
+  btn.textContent = 'Opening Google…';
+  try {
+    await store.signInWithGoogle();
+    renderAccountBlock();
+  } catch (e) {
+    document.getElementById('accountText').textContent =
+      'Sign-in did not complete: ' + (e.code || e.message) + '. Check that Google is enabled under Authentication in the Firebase console.';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Keep my data — sign in with Google';
   }
-  for (const n of nutrients) {
-    const name = (n.nutrientName || '').toLowerCase();
-    if (matchNames.some(m => name.includes(m))) return Math.round(n.value || 0);
+}
+
+/* ---------- USDA search ---------- */
+
+// USDA returns two nutrients both called "Energy" — one in KCAL, one in KJ.
+// Without the unit filter you get whichever comes first in the array, which
+// silently logs a 4.184x overcount.
+function pickNutrient(nutrients, matchNames, unit) {
+  if (!nutrients) return 0;
+  const unitOk = (x) => !unit || String(x.unitName || '').toUpperCase() === unit;
+  for (const x of nutrients) {
+    if (!unitOk(x)) continue;
+    const name = String(x.nutrientName || '').toLowerCase();
+    if (matchNames.some((m) => name === m)) return Number(x.value) || 0;
+  }
+  for (const x of nutrients) {
+    if (!unitOk(x)) continue;
+    const name = String(x.nutrientName || '').toLowerCase();
+    if (matchNames.some((m) => name.includes(m))) return Number(x.value) || 0;
   }
   return 0;
 }
@@ -549,69 +665,84 @@ async function searchUSDA() {
 
   const apiKey = localStorage.getItem(USDA_KEY_STORAGE);
   if (!apiKey) {
-    resultsEl.innerHTML = '<div class="search-status">No USDA API key set yet. Tap the gear icon top-right to add one (free, takes a minute).</div>';
+    resultsEl.innerHTML = '<div class="search-status">No USDA API key set yet. Tap the gear icon top right to add one — it is free and takes a minute.</div>';
     return;
   }
 
-  resultsEl.innerHTML = '<div class="search-status">Searching...</div>';
+  resultsEl.innerHTML = '<div class="search-status">Searching…</div>';
   try {
     const url = 'https://api.nal.usda.gov/fdc/v1/foods/search?api_key=' + encodeURIComponent(apiKey) +
       '&query=' + encodeURIComponent(query) + '&pageSize=10';
     const res = await fetch(url);
     if (!res.ok) {
-      resultsEl.innerHTML = '<div class="search-status">Search failed (status ' + res.status + '). Check your API key in settings.</div>';
+      resultsEl.innerHTML = '<div class="search-status">Search failed with status ' + res.status + '. Check your API key in settings.</div>';
       return;
     }
     const data = await res.json();
-    const foods = data.foods || [];
-    if (foods.length === 0) {
+    const items = data.foods || [];
+    if (items.length === 0) {
       resultsEl.innerHTML = '<div class="search-status">No results. Try a simpler search term.</div>';
       return;
     }
 
-    resultsEl.innerHTML = foods.map((f, i) => {
+    usdaResults = {};
+    resultsEl.innerHTML = items.map((f, i) => {
       let cal, pro, carb, fat, note;
       if (f.labelNutrients) {
-        cal = Math.round(f.labelNutrients.calories?.value || 0);
-        pro = Math.round(f.labelNutrients.protein?.value || 0);
-        carb = Math.round(f.labelNutrients.carbohydrates?.value || 0);
-        fat = Math.round(f.labelNutrients.fat?.value || 0);
+        cal = f.labelNutrients.calories?.value || 0;
+        pro = f.labelNutrients.protein?.value || 0;
+        carb = f.labelNutrients.carbohydrates?.value || 0;
+        fat = f.labelNutrients.fat?.value || 0;
         note = f.servingSize ? ('per ' + f.servingSize + (f.servingSizeUnit || '')) : 'per label serving';
       } else {
         const nutrients = f.foodNutrients || [];
-        cal = pickNutrient(nutrients, ['energy']);
-        pro = pickNutrient(nutrients, ['protein']);
-        carb = pickNutrient(nutrients, ['carbohydrate, by difference', 'carbohydrate']);
-        fat = pickNutrient(nutrients, ['total lipid (fat)', 'fat']);
+        cal = pickNutrient(nutrients, ['energy'], 'KCAL');
+        pro = pickNutrient(nutrients, ['protein'], 'G');
+        carb = pickNutrient(nutrients, ['carbohydrate, by difference', 'carbohydrate'], 'G');
+        fat = pickNutrient(nutrients, ['total lipid (fat)', 'fat'], 'G');
         note = 'per 100g — adjust for your portion';
       }
-      window.__usdaResults = window.__usdaResults || {};
-      window.__usdaResults[i] = { name: f.description, cal, pro, carb, fat };
+      usdaResults[i] = { name: f.description, cal, pro, carb, fat };
       return `
         <button class="search-result" onclick="useUSDAResult(${i})">
           <div class="rname">${escapeHtml(f.description)}</div>
-          <div class="rmacros">${cal} cal · ${pro}g P · ${carb}g C · ${fat}g F <span style="opacity:0.7">(${note})</span></div>
+          <div class="rmacros">${n(cal)} cal · ${n(pro)}g P · ${n(carb)}g C · ${n(fat)}g F <span style="opacity:0.7">(${escapeHtml(note)})</span></div>
         </button>
       `;
     }).join('');
   } catch (e) {
-    resultsEl.innerHTML = '<div class="search-status">Search error, check your connection and try again.</div>';
+    resultsEl.innerHTML = '<div class="search-status">Search error. Check your connection and try again.</div>';
   }
 }
 
 function useUSDAResult(i) {
-  const r = window.__usdaResults[i];
+  const r = usdaResults[i];
   if (!r) return;
   document.getElementById('mName').value = r.name;
-  document.getElementById('mCal').value = r.cal;
-  document.getElementById('mPro').value = r.pro;
-  document.getElementById('mCarb').value = r.carb;
-  document.getElementById('mFat').value = r.fat;
+  document.getElementById('mCal').value = n(r.cal);
+  document.getElementById('mPro').value = n(r.pro);
+  document.getElementById('mCarb').value = n(r.carb);
+  document.getElementById('mFat').value = n(r.fat);
   document.getElementById('searchResults').innerHTML = '';
   document.getElementById('usdaQuery').value = '';
 }
 
-loadAll();
+/* ---------- expose handlers ----------
+   The inline onclick attributes in the HTML above look for these on window.
+   A module's top-level functions are scoped to the module, so they have to be
+   published explicitly. If you later swap the onclick attributes for
+   addEventListener wiring, this block can go. */
+
+Object.assign(window, {
+  shiftDay, goToToday, jumpToDate, openDatePicker,
+  toggleGoalsForm, saveGoals,
+  openLogModal, closeLogModal, submitLogModal,
+  addFromPreset, removeLogEntry, deletePreset, toggleEdit,
+  openSettingsModal, closeSettingsModal, saveUsdaKey, connectGoogle,
+  searchUSDA, useUSDAResult,
+});
+
+boot();
 </script>
 </body>
 </html>
