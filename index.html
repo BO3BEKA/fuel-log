@@ -33,9 +33,32 @@
   #app { width: 100%; max-width: 440px; padding: 20px 16px 60px; }
   .num { font-family: 'Space Grotesk', sans-serif; }
 
-  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
   header h1 { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-  header .date { font-size: 13px; color: var(--text-muted); }
+  header button.gear { background: none; border: none; color: var(--text-muted); font-size: 16px; cursor: pointer; padding: 2px; }
+  header button.gear:hover { color: var(--text); }
+
+  .day-nav {
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 8px 10px; margin-bottom: 16px;
+  }
+  .day-nav button.arrow {
+    background: none; border: none; color: var(--text); font-size: 16px; cursor: pointer;
+    padding: 6px 10px; border-radius: 8px;
+  }
+  .day-nav button.arrow:hover { background: var(--surface-raised); }
+  .day-nav .day-label { font-size: 13.5px; font-weight: 500; text-align: center; flex: 1; }
+  .day-nav .day-label .rel { color: var(--text-muted); font-size: 11px; display: block; margin-top: 1px; }
+  .day-nav button.today-btn {
+    background: none; border: 1px solid var(--line); color: var(--text-muted); font-size: 11px;
+    padding: 4px 8px; border-radius: 6px; cursor: pointer; margin-left: 6px;
+  }
+  .day-nav button.today-btn:hover { color: var(--text); }
+  .day-nav input[type="date"] {
+    background: none; border: none; color: transparent; position: absolute;
+    width: 1px; height: 1px; opacity: 0;
+  }
 
   .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
   .stat-card {
@@ -93,17 +116,19 @@
   .btn-primary { background: var(--amber); color: #1a1305; }
   .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--line); }
   .btn-block { width: 100%; }
+  .btn-sm { padding: 7px 10px; font-size: 12px; }
 
   .modal-backdrop {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
-    align-items: flex-end; justify-content: center; z-index: 10;
+    align-items: flex-end; justify-content: center; z-index: 10; overflow-y: auto;
   }
   .modal-backdrop.open { display: flex; }
   .modal {
     background: var(--surface); border: 1px solid var(--line); border-radius: 16px 16px 0 0;
-    width: 100%; max-width: 440px; padding: 18px 16px 24px;
+    width: 100%; max-width: 440px; padding: 18px 16px 24px; margin-top: auto;
   }
-  .modal h2 { font-family: 'Space Grotesk', sans-serif; font-size: 16px; margin: 0 0 14px; }
+  .modal h2 { font-family: 'Space Grotesk', sans-serif; font-size: 16px; margin: 0 0 4px; }
+  .modal .sub { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
   .field { margin-bottom: 10px; }
   .field label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px; }
   .field input {
@@ -116,9 +141,29 @@
   .check-row input { width: 16px; height: 16px; }
   .modal .actions { display: flex; gap: 8px; }
 
+  .search-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  .search-row input { flex: 1; }
+  .search-results { max-height: 220px; overflow-y: auto; margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .search-result {
+    background: var(--surface-raised); border: 1px solid var(--line); border-radius: 8px;
+    padding: 9px 10px; text-align: left; cursor: pointer; color: var(--text); font-family: inherit;
+  }
+  .search-result:hover { border-color: #3a4144; }
+  .search-result .rname { font-size: 12.5px; font-weight: 500; margin-bottom: 3px; }
+  .search-result .rmacros { font-size: 11px; color: var(--text-muted); }
+  .search-status { font-size: 12px; color: var(--text-muted); padding: 6px 2px; }
+  .divider-text {
+    display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--text-muted);
+    margin: 14px 0 12px;
+  }
+  .divider-text::before, .divider-text::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+
   .goals-form { display: none; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 18px; }
   .goals-form.open { display: block; }
   .goals-form .row { display: flex; gap: 8px; margin-bottom: 8px; }
+
+  .settings-modal .field small { color: var(--text-muted); font-size: 11px; display: block; margin-top: 4px; line-height: 1.4; }
+  .settings-modal a { color: var(--amber); }
 
   .log-list { display: flex; flex-direction: column; gap: 6px; }
   .log-empty { color: var(--text-muted); font-size: 13px; padding: 18px 4px; text-align: center; border: 1px dashed var(--line); border-radius: 12px; }
@@ -140,8 +185,19 @@
 <div id="app">
   <header>
     <h1>Fuel Log</h1>
-    <span class="date" id="dateLabel"></span>
+    <button class="gear" onclick="openSettingsModal()" title="Settings">&#9881;</button>
   </header>
+
+  <div class="day-nav">
+    <button class="arrow" onclick="shiftDay(-1)">&#8249;</button>
+    <div class="day-label" onclick="document.getElementById('dateJump').showPicker && document.getElementById('dateJump').showPicker()">
+      <span id="dayLabelMain">Today</span>
+      <span class="rel" id="dayLabelSub"></span>
+      <input type="date" id="dateJump" onchange="jumpToDate(this.value)">
+    </div>
+    <button class="arrow" onclick="shiftDay(1)" id="nextDayBtn">&#8250;</button>
+    <button class="today-btn" id="todayJumpBtn" onclick="goToToday()" style="display:none;">Today</button>
+  </div>
 
   <div class="stats">
     <div class="stat-card cal" id="calCard" onclick="toggleGoalsForm()">
@@ -185,13 +241,23 @@
   </div>
   <div class="presets" id="presetsGrid"></div>
 
-  <div class="section-title">Today's log</div>
+  <div class="section-title"><span id="logSectionTitle">Today's log</span></div>
   <div class="log-list" id="logList"></div>
 </div>
 
 <div class="modal-backdrop" id="modalBackdrop" onclick="if(event.target===this) closeLogModal()">
   <div class="modal">
     <h2>Log a food</h2>
+    <div class="sub" id="modalDaySub">Adding to today</div>
+
+    <div class="search-row">
+      <input id="usdaQuery" placeholder="Search USDA food database..." onkeydown="if(event.key==='Enter'){event.preventDefault();searchUSDA();}">
+      <button class="btn btn-primary btn-sm" onclick="searchUSDA()">Search</button>
+    </div>
+    <div class="search-results" id="searchResults"></div>
+
+    <div class="divider-text">or enter manually</div>
+
     <div class="field"><label>Name</label><input id="mName" placeholder="e.g. Chick-fil-A sandwich"></div>
     <div class="macro-grid">
       <div class="field"><label>Calories</label><input id="mCal" type="number" inputmode="numeric" placeholder="0"></div>
@@ -210,16 +276,35 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="settingsBackdrop" onclick="if(event.target===this) closeSettingsModal()">
+  <div class="modal settings-modal">
+    <h2>Settings</h2>
+    <div class="sub">USDA FoodData Central connects the search bar to a real nutrition database.</div>
+    <div class="field">
+      <label>USDA API key</label>
+      <input id="usdaKeyInput" placeholder="Paste your key here">
+      <small>Free, instant, no payment info required. Get one at <a href="https://fdc.nal.usda.gov/api-key-signup.html" target="_blank">fdc.nal.usda.gov/api-key-signup.html</a>, then paste it here. Stored only in this browser.</small>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" style="flex:1" onclick="saveUsdaKey()">Save key</button>
+      <button class="btn btn-ghost" onclick="closeSettingsModal()">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const STORAGE_PREFIX = 'fuellog:';
-const todayKey = () => {
-  const d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-};
-const LOG_KEY = STORAGE_PREFIX + 'log:' + todayKey();
 const PRESETS_KEY = STORAGE_PREFIX + 'presets';
 const GOALS_KEY = STORAGE_PREFIX + 'goals';
+const USDA_KEY_STORAGE = STORAGE_PREFIX + 'usdaKey';
 
+function dateKey(d) {
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function startOfDay(d) { const n = new Date(d); n.setHours(0,0,0,0); return n; }
+function logKeyFor(d) { return STORAGE_PREFIX + 'log:' + dateKey(d); }
+
+let viewDate = startOfDay(new Date());
 let presets = [];
 let log = [];
 let goals = { calories: 2700, protein: 155, carbs: 0, fat: 0 };
@@ -235,10 +320,8 @@ const DEFAULT_PRESETS = [
 ];
 
 function loadJSON(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch { return fallback; }
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch { return fallback; }
 }
 function saveJSON(key, value) {
   try { localStorage.setItem(key, JSON.stringify(value)); }
@@ -247,13 +330,55 @@ function saveJSON(key, value) {
 
 function loadAll() {
   presets = loadJSON(PRESETS_KEY, DEFAULT_PRESETS);
-  log = loadJSON(LOG_KEY, []);
   goals = loadJSON(GOALS_KEY, goals);
+  loadLogForViewDate();
+  render();
+}
+function loadLogForViewDate() {
+  log = loadJSON(logKeyFor(viewDate), []);
+}
+function saveLogForViewDate() {
+  saveJSON(logKeyFor(viewDate), log);
+}
+
+function shiftDay(delta) {
+  const d = new Date(viewDate);
+  d.setDate(d.getDate() + delta);
+  viewDate = startOfDay(d);
+  loadLogForViewDate();
+  render();
+}
+function goToToday() {
+  viewDate = startOfDay(new Date());
+  loadLogForViewDate();
+  render();
+}
+function jumpToDate(value) {
+  if (!value) return;
+  const [y,m,dd] = value.split('-').map(Number);
+  viewDate = startOfDay(new Date(y, m-1, dd));
+  loadLogForViewDate();
   render();
 }
 
+function formatDayLabel(d) {
+  const today = startOfDay(new Date());
+  const diffDays = Math.round((d - today) / 86400000);
+  if (diffDays === 0) return { main: 'Today', sub: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) };
+  if (diffDays === -1) return { main: 'Yesterday', sub: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) };
+  if (diffDays === 1) return { main: 'Tomorrow', sub: d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) };
+  return { main: d.toLocaleDateString('en-US', { weekday: 'long' }), sub: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) };
+}
+
 function render() {
-  document.getElementById('dateLabel').textContent = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const label = formatDayLabel(viewDate);
+  document.getElementById('dayLabelMain').textContent = label.main;
+  document.getElementById('dayLabelSub').textContent = label.sub;
+  const isToday = dateKey(viewDate) === dateKey(new Date());
+  document.getElementById('todayJumpBtn').style.display = isToday ? 'none' : 'inline-block';
+  document.getElementById('nextDayBtn').disabled = false;
+  document.getElementById('logSectionTitle').textContent = isToday ? "Today's log" : label.main + "'s log";
+  document.getElementById('modalDaySub').textContent = isToday ? 'Adding to today' : 'Adding to ' + label.main.toLowerCase() + ' (' + label.sub + ')';
 
   const totalCal = log.reduce((s, e) => s + e.cal, 0);
   const totalPro = log.reduce((s, e) => s + e.pro, 0);
@@ -285,16 +410,16 @@ function render() {
   const grid = document.getElementById('presetsGrid');
   grid.className = 'presets' + (editMode ? ' edit-mode' : '');
   grid.innerHTML = presets.map(p => `
-    <button class="preset" onclick="${editMode ? '' : `addFromPreset('${p.id}')`}">
+    <div class="preset" role="button" tabindex="0" onclick="${editMode ? '' : `addFromPreset('${p.id}')`}">
       <button class="del" onclick="event.stopPropagation(); deletePreset('${p.id}')">×</button>
       <span class="name">${escapeHtml(p.name)}</span>
       <span class="tags"><span class="tag c">${p.cal} cal</span><span class="tag p">${p.pro}g pro</span></span>
-    </button>
+    </div>
   `).join('');
 
   const listEl = document.getElementById('logList');
   if (log.length === 0) {
-    listEl.innerHTML = '<div class="log-empty">Nothing logged yet today.</div>';
+    listEl.innerHTML = '<div class="log-empty">Nothing logged ' + (isToday ? 'yet today.' : 'on this day.') + '</div>';
   } else {
     listEl.innerHTML = log.slice().reverse().map(e => `
       <div class="log-item">
@@ -324,24 +449,27 @@ function addFromPreset(id) {
     id: 'e' + Date.now(), name: p.name, cal: p.cal, pro: p.pro, carb: p.carb || 0, fat: p.fat || 0,
     time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
   });
-  saveJSON(LOG_KEY, log);
+  saveLogForViewDate();
   render();
 }
 
 function removeLogEntry(id) {
   log = log.filter(e => e.id !== id);
-  saveJSON(LOG_KEY, log);
+  saveLogForViewDate();
   render();
 }
 
 function openLogModal() {
   document.getElementById('modalBackdrop').classList.add('open');
+  document.getElementById('searchResults').innerHTML = '';
+  document.getElementById('usdaQuery').value = '';
   document.getElementById('mName').focus();
 }
 function closeLogModal() {
   document.getElementById('modalBackdrop').classList.remove('open');
   ['mName','mCal','mPro','mCarb','mFat'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('mSaveSpot').checked = true;
+  document.getElementById('searchResults').innerHTML = '';
 }
 function submitLogModal() {
   const name = document.getElementById('mName').value.trim();
@@ -353,7 +481,7 @@ function submitLogModal() {
 
   const entry = { id: 'e' + Date.now(), name, cal, pro, carb, fat, time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) };
   log.push(entry);
-  saveJSON(LOG_KEY, log);
+  saveLogForViewDate();
 
   if (document.getElementById('mSaveSpot').checked) {
     presets.push({ id: 'p' + Date.now(), name, cal, pro, carb, fat });
@@ -385,6 +513,102 @@ function saveGoals() {
   goals = { calories: c, protein: p, carbs: cb, fat: f };
   saveJSON(GOALS_KEY, goals);
   render();
+}
+
+function openSettingsModal() {
+  document.getElementById('usdaKeyInput').value = localStorage.getItem(USDA_KEY_STORAGE) || '';
+  document.getElementById('settingsBackdrop').classList.add('open');
+}
+function closeSettingsModal() {
+  document.getElementById('settingsBackdrop').classList.remove('open');
+}
+function saveUsdaKey() {
+  const key = document.getElementById('usdaKeyInput').value.trim();
+  if (key) localStorage.setItem(USDA_KEY_STORAGE, key);
+  else localStorage.removeItem(USDA_KEY_STORAGE);
+  closeSettingsModal();
+}
+
+function pickNutrient(nutrients, matchNames) {
+  if (!nutrients) return 0;
+  for (const n of nutrients) {
+    const name = (n.nutrientName || '').toLowerCase();
+    if (matchNames.some(m => name === m)) return Math.round(n.value || 0);
+  }
+  for (const n of nutrients) {
+    const name = (n.nutrientName || '').toLowerCase();
+    if (matchNames.some(m => name.includes(m))) return Math.round(n.value || 0);
+  }
+  return 0;
+}
+
+async function searchUSDA() {
+  const query = document.getElementById('usdaQuery').value.trim();
+  const resultsEl = document.getElementById('searchResults');
+  if (!query) return;
+
+  const apiKey = localStorage.getItem(USDA_KEY_STORAGE);
+  if (!apiKey) {
+    resultsEl.innerHTML = '<div class="search-status">No USDA API key set yet. Tap the gear icon top-right to add one (free, takes a minute).</div>';
+    return;
+  }
+
+  resultsEl.innerHTML = '<div class="search-status">Searching...</div>';
+  try {
+    const url = 'https://api.nal.usda.gov/fdc/v1/foods/search?api_key=' + encodeURIComponent(apiKey) +
+      '&query=' + encodeURIComponent(query) + '&pageSize=10';
+    const res = await fetch(url);
+    if (!res.ok) {
+      resultsEl.innerHTML = '<div class="search-status">Search failed (status ' + res.status + '). Check your API key in settings.</div>';
+      return;
+    }
+    const data = await res.json();
+    const foods = data.foods || [];
+    if (foods.length === 0) {
+      resultsEl.innerHTML = '<div class="search-status">No results. Try a simpler search term.</div>';
+      return;
+    }
+
+    resultsEl.innerHTML = foods.map((f, i) => {
+      let cal, pro, carb, fat, note;
+      if (f.labelNutrients) {
+        cal = Math.round(f.labelNutrients.calories?.value || 0);
+        pro = Math.round(f.labelNutrients.protein?.value || 0);
+        carb = Math.round(f.labelNutrients.carbohydrates?.value || 0);
+        fat = Math.round(f.labelNutrients.fat?.value || 0);
+        note = f.servingSize ? ('per ' + f.servingSize + (f.servingSizeUnit || '')) : 'per label serving';
+      } else {
+        const nutrients = f.foodNutrients || [];
+        cal = pickNutrient(nutrients, ['energy']);
+        pro = pickNutrient(nutrients, ['protein']);
+        carb = pickNutrient(nutrients, ['carbohydrate, by difference', 'carbohydrate']);
+        fat = pickNutrient(nutrients, ['total lipid (fat)', 'fat']);
+        note = 'per 100g — adjust for your portion';
+      }
+      window.__usdaResults = window.__usdaResults || {};
+      window.__usdaResults[i] = { name: f.description, cal, pro, carb, fat };
+      return `
+        <button class="search-result" onclick="useUSDAResult(${i})">
+          <div class="rname">${escapeHtml(f.description)}</div>
+          <div class="rmacros">${cal} cal · ${pro}g P · ${carb}g C · ${fat}g F <span style="opacity:0.7">(${note})</span></div>
+        </button>
+      `;
+    }).join('');
+  } catch (e) {
+    resultsEl.innerHTML = '<div class="search-status">Search error, check your connection and try again.</div>';
+  }
+}
+
+function useUSDAResult(i) {
+  const r = window.__usdaResults[i];
+  if (!r) return;
+  document.getElementById('mName').value = r.name;
+  document.getElementById('mCal').value = r.cal;
+  document.getElementById('mPro').value = r.pro;
+  document.getElementById('mCarb').value = r.carb;
+  document.getElementById('mFat').value = r.fat;
+  document.getElementById('searchResults').innerHTML = '';
+  document.getElementById('usdaQuery').value = '';
 }
 
 loadAll();
