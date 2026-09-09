@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Fuel Log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { 
+    --bg: #101314;
+    --surface: #191d1f;
+    --surface-raised: #202527;
+    --line: #2a2f31;
+    --text: #ece8e0;
+    --text-muted: #878e94;
+    --amber: #e8963c;
+    --sage: #5b9c7a;
+    --blue: #6f9bd1;
+    --violet: #9a86c4;
+    --danger: #c25b4e;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body { display: flex; justify-content: center; min-height: 100vh; }
+  #app { width: 100%; max-width: 440px; padding: 20px 16px 60px; }
+  .num { font-family: 'Space Grotesk', sans-serif; }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; }
+  header h1 { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  header .date { font-size: 13px; color: var(--text-muted); }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px 16px 14px; cursor: pointer;
+  }
+  .stat-card .label { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+  .stat-card .big { font-size: 30px; font-weight: 700; line-height: 1; }
+  .stat-card .of { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .bar-track { margin-top: 10px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 3px; transition: width 0.35s ease; }
+  .cal .bar-fill { background: var(--amber); }
+  .pro .bar-fill { background: var(--sage); }
+  .cal .big { color: var(--amber); }
+  .pro .big { color: var(--sage); }
+  .over .big { color: var(--danger); }
+  .over .bar-fill { background: var(--danger); }
+
+  .micro-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+  .micro-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 10px 12px; display: flex; justify-content: space-between; align-items: center;
+  }
+  .micro-card .label { font-size: 12px; color: var(--text-muted); }
+  .micro-card .val { font-size: 15px; font-weight: 600; }
+  .micro-card.carbs .val { color: var(--blue); }
+  .micro-card.fat .val { color: var(--violet); }
+
+  .section-title { font-size: 13px; color: var(--text-muted); margin: 22px 0 10px; display: flex; justify-content: space-between; align-items: center; }
+  .section-title button { background: none; border: none; color: var(--text-muted); font-size: 13px; font-family: inherit; cursor: pointer; padding: 2px 0; }
+  .section-title button:hover { color: var(--text); }
+
+  .presets { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .preset {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px; text-align: left; cursor: pointer; color: var(--text); font-family: inherit;
+    display: flex; flex-direction: column; gap: 6px; position: relative;
+    transition: transform 0.08s ease, border-color 0.15s ease;
+  }
+  .preset:active { transform: scale(0.97); }
+  .preset:hover { border-color: #3a4144; }
+  .preset .name { font-size: 13.5px; font-weight: 500; line-height: 1.25; }
+  .preset .tags { display: flex; gap: 6px; font-size: 11px; flex-wrap: wrap; }
+  .preset .tag { color: var(--text-muted); }
+  .preset .tag.c { color: var(--amber); }
+  .preset .tag.p { color: var(--sage); }
+  .preset .del {
+    position: absolute; top: 6px; right: 8px; background: none; border: none;
+    color: var(--text-muted); font-size: 14px; cursor: pointer; display: none; line-height: 1; padding: 2px;
+  }
+  .edit-mode .preset .del { display: block; }
+  .edit-mode .preset { cursor: default; }
+
+  .btn { font-family: inherit; font-size: 13px; font-weight: 500; border-radius: 8px; padding: 9px 14px; border: none; cursor: pointer; }
+  .btn-primary { background: var(--amber); color: #1a1305; }
+  .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--line); }
+  .btn-block { width: 100%; }
+
+  .modal-backdrop {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    align-items: flex-end; justify-content: center; z-index: 10;
+  }
+  .modal-backdrop.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 16px 16px 0 0;
+    width: 100%; max-width: 440px; padding: 18px 16px 24px;
+  }
+  .modal h2 { font-family: 'Space Grotesk', sans-serif; font-size: 16px; margin: 0 0 14px; }
+  .field { margin-bottom: 10px; }
+  .field label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 4px; }
+  .field input {
+    background: var(--surface-raised); border: 1px solid var(--line); border-radius: 8px;
+    color: var(--text); font-family: inherit; font-size: 14px; padding: 10px 11px; width: 100%;
+  }
+  .field input::placeholder { color: var(--text-muted); }
+  .macro-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .check-row { display: flex; align-items: center; gap: 8px; margin: 12px 0 16px; font-size: 13px; color: var(--text-muted); }
+  .check-row input { width: 16px; height: 16px; }
+  .modal .actions { display: flex; gap: 8px; }
+
+  .goals-form { display: none; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 18px; }
+  .goals-form.open { display: block; }
+  .goals-form .row { display: flex; gap: 8px; margin-bottom: 8px; }
+
+  .log-list { display: flex; flex-direction: column; gap: 6px; }
+  .log-empty { color: var(--text-muted); font-size: 13px; padding: 18px 4px; text-align: center; border: 1px dashed var(--line); border-radius: 12px; }
+  .log-item { display: flex; align-items: center; justify-content: space-between; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .log-item .left { display: flex; flex-direction: column; gap: 2px; }
+  .log-item .name { font-size: 13.5px; }
+  .log-item .time { font-size: 11px; color: var(--text-muted); }
+  .log-item .right { display: flex; align-items: center; gap: 10px; }
+  .log-item .macros { font-size: 11.5px; color: var(--text-muted); text-align: right; white-space: nowrap; }
+  .log-item .macros .c { color: var(--amber); }
+  .log-item .macros .p { color: var(--sage); }
+  .log-item .rm { background: none; border: none; color: var(--text-muted); font-size: 15px; cursor: pointer; padding: 4px; }
+  .log-item .rm:hover { color: var(--danger); }
+
+  .fab-row { display: flex; gap: 8px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Fuel Log</h1>
+    <span class="date" id="dateLabel"></span>
+  </header>
+
+  <div class="stats">
+    <div class="stat-card cal" id="calCard" onclick="toggleGoalsForm()">
+      <div class="label">Calories left</div>
+      <div class="big num" id="calLeft">0</div>
+      <div class="of num" id="calOf">of 0</div>
+      <div class="bar-track"><div class="bar-fill" id="calBar" style="width:0%"></div></div>
+    </div>
+    <div class="stat-card pro" id="proCard" onclick="toggleGoalsForm()">
+      <div class="label">Protein left</div>
+      <div class="big num" id="proLeft">0g</div>
+      <div class="of num" id="proOf">of 0g</div>
+      <div class="bar-track"><div class="bar-fill" id="proBar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <div class="micro-row">
+    <div class="micro-card carbs"><span class="label">Carbs</span><span class="val num" id="carbsVal">0g</span></div>
+    <div class="micro-card fat"><span class="label">Fat</span><span class="val num" id="fatVal">0g</span></div>
+  </div>
+
+  <div class="goals-form" id="goalsForm">
+    <div class="row">
+      <div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Calorie goal</label><input type="number" inputmode="numeric" id="goalCalInput" placeholder="2700"></div>
+      <div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Protein goal (g)</label><input type="number" inputmode="numeric" id="goalProInput" placeholder="155"></div>
+    </div>
+    <div class="row">
+      <div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Carb goal (g, optional)</label><input type="number" inputmode="numeric" id="goalCarbInput" placeholder="0"></div>
+      <div style="flex:1"><label style="font-size:11px;color:var(--text-muted);display:block;margin-bottom:4px;">Fat goal (g, optional)</label><input type="number" inputmode="numeric" id="goalFatInput" placeholder="0"></div>
+    </div>
+    <button class="btn btn-primary btn-block" onclick="saveGoals()">Save goals</button>
+  </div>
+
+  <div class="fab-row">
+    <button class="btn btn-primary btn-block" onclick="openLogModal()">+ Log a food</button>
+  </div>
+
+  <div class="section-title">
+    Quick add
+    <button onclick="toggleEdit()" id="editToggleBtn">Edit spots</button>
+  </div>
+  <div class="presets" id="presetsGrid"></div>
+
+  <div class="section-title">Today's log</div>
+  <div class="log-list" id="logList"></div>
+</div>
+
+<div class="modal-backdrop" id="modalBackdrop" onclick="if(event.target===this) closeLogModal()">
+  <div class="modal">
+    <h2>Log a food</h2>
+    <div class="field"><label>Name</label><input id="mName" placeholder="e.g. Chick-fil-A sandwich"></div>
+    <div class="macro-grid">
+      <div class="field"><label>Calories</label><input id="mCal" type="number" inputmode="numeric" placeholder="0"></div>
+      <div class="field"><label>Protein (g)</label><input id="mPro" type="number" inputmode="numeric" placeholder="0"></div>
+      <div class="field"><label>Carbs (g)</label><input id="mCarb" type="number" inputmode="numeric" placeholder="0"></div>
+    </div>
+    <div class="field" style="width:33%"><label>Fat (g)</label><input id="mFat" type="number" inputmode="numeric" placeholder="0"></div>
+    <div class="check-row">
+      <input type="checkbox" id="mSaveSpot" checked>
+      <label for="mSaveSpot">Save as a quick-add spot for next time</label>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" style="flex:1" onclick="submitLogModal()">Log it</button>
+      <button class="btn btn-ghost" onclick="closeLogModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const STORAGE_PREFIX = 'fuellog:';
+const todayKey = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+};
+const LOG_KEY = STORAGE_PREFIX + 'log:' + todayKey();
+const PRESETS_KEY = STORAGE_PREFIX + 'presets';
+const GOALS_KEY = STORAGE_PREFIX + 'goals';
+
+let presets = [];
+let log = [];
+let goals = { calories: 2700, protein: 155, carbs: 0, fat: 0 };
+let editMode = false;
+
+const DEFAULT_PRESETS = [
+  { id: 'p1', name: 'Rand Dining — chicken bowl', cal: 650, pro: 45, carb: 60, fat: 18 },
+  { id: 'p2', name: 'Rand Dining — omelet + toast', cal: 520, pro: 30, carb: 40, fat: 22 },
+  { id: 'p3', name: 'Publix — rotisserie chicken + rice', cal: 600, pro: 50, carb: 55, fat: 15 },
+  { id: 'p4', name: 'Publix — protein shake', cal: 250, pro: 30, carb: 12, fat: 6 },
+  { id: 'p5', name: 'Commons — pasta station', cal: 700, pro: 25, carb: 95, fat: 20 },
+  { id: 'p6', name: 'Protein bar', cal: 220, pro: 20, carb: 22, fat: 7 },
+];
+
+function loadJSON(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch { return fallback; }
+}
+function saveJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); }
+  catch (e) { console.error('save failed', key, e); }
+}
+
+function loadAll() {
+  presets = loadJSON(PRESETS_KEY, DEFAULT_PRESETS);
+  log = loadJSON(LOG_KEY, []);
+  goals = loadJSON(GOALS_KEY, goals);
+  render();
+}
+
+function render() {
+  document.getElementById('dateLabel').textContent = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+  const totalCal = log.reduce((s, e) => s + e.cal, 0);
+  const totalPro = log.reduce((s, e) => s + e.pro, 0);
+  const totalCarb = log.reduce((s, e) => s + (e.carb || 0), 0);
+  const totalFat = log.reduce((s, e) => s + (e.fat || 0), 0);
+
+  const calLeft = goals.calories - totalCal;
+  const proLeft = goals.protein - totalPro;
+
+  document.getElementById('calCard').classList.toggle('over', calLeft < 0);
+  document.getElementById('proCard').classList.toggle('over', proLeft < 0);
+
+  document.getElementById('calLeft').textContent = Math.abs(calLeft) + (calLeft < 0 ? ' over' : '');
+  document.getElementById('calOf').textContent = 'of ' + goals.calories + ' · eaten ' + totalCal;
+  document.getElementById('calBar').style.width = Math.min(100, (totalCal / goals.calories) * 100) + '%';
+
+  document.getElementById('proLeft').textContent = Math.abs(proLeft) + 'g' + (proLeft < 0 ? ' over' : '');
+  document.getElementById('proOf').textContent = 'of ' + goals.protein + 'g · eaten ' + totalPro + 'g';
+  document.getElementById('proBar').style.width = Math.min(100, (totalPro / goals.protein) * 100) + '%';
+
+  document.getElementById('carbsVal').textContent = totalCarb + 'g' + (goals.carbs > 0 ? ' / ' + goals.carbs + 'g' : '');
+  document.getElementById('fatVal').textContent = totalFat + 'g' + (goals.fat > 0 ? ' / ' + goals.fat + 'g' : '');
+
+  document.getElementById('goalCalInput').value = goals.calories;
+  document.getElementById('goalProInput').value = goals.protein;
+  document.getElementById('goalCarbInput').value = goals.carbs || '';
+  document.getElementById('goalFatInput').value = goals.fat || '';
+
+  const grid = document.getElementById('presetsGrid');
+  grid.className = 'presets' + (editMode ? ' edit-mode' : '');
+  grid.innerHTML = presets.map(p => `
+    <button class="preset" onclick="${editMode ? '' : `addFromPreset('${p.id}')`}">
+      <button class="del" onclick="event.stopPropagation(); deletePreset('${p.id}')">×</button>
+      <span class="name">${escapeHtml(p.name)}</span>
+      <span class="tags"><span class="tag c">${p.cal} cal</span><span class="tag p">${p.pro}g pro</span></span>
+    </button>
+  `).join('');
+
+  const listEl = document.getElementById('logList');
+  if (log.length === 0) {
+    listEl.innerHTML = '<div class="log-empty">Nothing logged yet today.</div>';
+  } else {
+    listEl.innerHTML = log.slice().reverse().map(e => `
+      <div class="log-item">
+        <div class="left">
+          <span class="name">${escapeHtml(e.name)}</span>
+          <span class="time">${e.time}</span>
+        </div>
+        <div class="right">
+          <span class="macros"><span class="c">${e.cal} cal</span> · <span class="p">${e.pro}g P</span> · ${e.carb||0}g C · ${e.fat||0}g F</span>
+          <button class="rm" onclick="removeLogEntry('${e.id}')">×</button>
+        </div>
+      </div>
+    `).join('');
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function addFromPreset(id) {
+  const p = presets.find(x => x.id === id);
+  if (!p) return;
+  log.push({
+    id: 'e' + Date.now(), name: p.name, cal: p.cal, pro: p.pro, carb: p.carb || 0, fat: p.fat || 0,
+    time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  });
+  saveJSON(LOG_KEY, log);
+  render();
+}
+
+function removeLogEntry(id) {
+  log = log.filter(e => e.id !== id);
+  saveJSON(LOG_KEY, log);
+  render();
+}
+
+function openLogModal() {
+  document.getElementById('modalBackdrop').classList.add('open');
+  document.getElementById('mName').focus();
+}
+function closeLogModal() {
+  document.getElementById('modalBackdrop').classList.remove('open');
+  ['mName','mCal','mPro','mCarb','mFat'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('mSaveSpot').checked = true;
+}
+function submitLogModal() {
+  const name = document.getElementById('mName').value.trim();
+  const cal = parseInt(document.getElementById('mCal').value) || 0;
+  const pro = parseInt(document.getElementById('mPro').value) || 0;
+  const carb = parseInt(document.getElementById('mCarb').value) || 0;
+  const fat = parseInt(document.getElementById('mFat').value) || 0;
+  if (!name || cal <= 0) return;
+
+  const entry = { id: 'e' + Date.now(), name, cal, pro, carb, fat, time: new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) };
+  log.push(entry);
+  saveJSON(LOG_KEY, log);
+
+  if (document.getElementById('mSaveSpot').checked) {
+    presets.push({ id: 'p' + Date.now(), name, cal, pro, carb, fat });
+    saveJSON(PRESETS_KEY, presets);
+  }
+
+  closeLogModal();
+  render();
+}
+
+function deletePreset(id) {
+  presets = presets.filter(p => p.id !== id);
+  saveJSON(PRESETS_KEY, presets);
+  render();
+}
+function toggleEdit() {
+  editMode = !editMode;
+  document.getElementById('editToggleBtn').textContent = editMode ? 'Done' : 'Edit spots';
+  render();
+}
+function toggleGoalsForm() {
+  document.getElementById('goalsForm').classList.toggle('open');
+}
+function saveGoals() {
+  const c = parseInt(document.getElementById('goalCalInput').value) || goals.calories;
+  const p = parseInt(document.getElementById('goalProInput').value) || goals.protein;
+  const cb = parseInt(document.getElementById('goalCarbInput').value) || 0;
+  const f = parseInt(document.getElementById('goalFatInput').value) || 0;
+  goals = { calories: c, protein: p, carbs: cb, fat: f };
+  saveJSON(GOALS_KEY, goals);
+  render();
+}
+
+loadAll();
+</script>
+</body>
+</html>
