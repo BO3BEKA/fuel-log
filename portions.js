@@ -11,6 +11,8 @@
 // "1 scoop") are stored as an amount in the food's own refUnit, so the scaling
 // maths never has to know what a breast is.
 
+import { normalizeMicros, scaleMicros, sumMicros } from './nutrients.js';
+
 export const MASS_UNITS = { g: 1, kg: 1000, oz: 28.3495, lb: 453.592 };
 export const VOLUME_UNITS = { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588, floz: 29.5735 };
 
@@ -63,6 +65,9 @@ export function normalizeFood(raw) {
   f.pro = Number(f.pro) || 0;
   f.carb = Number(f.carb) || 0;
   f.fat = Number(f.fat) || 0;
+
+  // Micronutrients are stored per refAmount too, so they scale identically.
+  f.micros = normalizeMicros(f.micros);
 
   f.servings = Array.isArray(f.servings)
     ? f.servings
@@ -127,7 +132,7 @@ export function scale(food, qty, optionId) {
   const f = normalizeFood(food);
   const opt = findOption(f, optionId);
   const q = Number(qty);
-  if (!Number.isFinite(q) || q <= 0) return { cal: 0, pro: 0, carb: 0, fat: 0 };
+  if (!Number.isFinite(q) || q <= 0) return { cal: 0, pro: 0, carb: 0, fat: 0, micros: {} };
 
   const factor = (q * opt.amount) / f.refAmount;
   return {
@@ -135,6 +140,7 @@ export function scale(food, qty, optionId) {
     pro: f.pro * factor,
     carb: f.carb * factor,
     fat: f.fat * factor,
+    micros: scaleMicros(f.micros, factor),
   };
 }
 
@@ -196,7 +202,7 @@ export function trimNum(v) {
 export const round = (v) => Math.round(Number(v) || 0);
 
 export function sumMacros(entries) {
-  return entries.reduce(
+  const t = entries.reduce(
     (a, e) => ({
       cal: a.cal + (Number(e.cal) || 0),
       pro: a.pro + (Number(e.pro) || 0),
@@ -205,6 +211,8 @@ export function sumMacros(entries) {
     }),
     { cal: 0, pro: 0, carb: 0, fat: 0 }
   );
+  t.micros = sumMicros(entries);
+  return t;
 }
 
 export function groupByMeal(entries) {

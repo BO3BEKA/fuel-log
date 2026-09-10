@@ -22,6 +22,7 @@
 
 import { firebaseConfig, isConfigured, SDK } from "./firebase-config.js";
 import { normalizeFood } from "./portions.js";
+import { normalizeMicros } from "./nutrients.js";
 
 const PREFIX = "fuellog:";
 const PRESETS_KEY = PREFIX + "presets";
@@ -71,6 +72,7 @@ function entryPayload(e) {
     pro: Number(e.pro) || 0,
     carb: Number(e.carb) || 0,
     fat: Number(e.fat) || 0,
+    micros: normalizeMicros(e.micros),
     qty: Number(e.qty) || 1,
     portionId: e.portionId || "serving",
     portionLabel: String(e.portionLabel || "").slice(0, 60),
@@ -86,6 +88,7 @@ function foodPayload(f) {
   return {
     name: String(n.name || "").slice(0, 200),
     cal: n.cal, pro: n.pro, carb: n.carb, fat: n.fat,
+    micros: n.micros,
     refAmount: n.refAmount,
     refUnit: n.refUnit,
     servings: n.servings.slice(0, 8),
@@ -102,6 +105,7 @@ function recentPayload(f) {
   return {
     name: n.name,
     cal: n.cal, pro: n.pro, carb: n.carb, fat: n.fat,
+    micros: n.micros,
     refAmount: n.refAmount, refUnit: n.refUnit,
     servings: n.servings.slice(0, 4),
     defaultQty: n.defaultQty, defaultUnitId: n.defaultUnitId,

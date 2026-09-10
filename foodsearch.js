@@ -15,6 +15,11 @@
 //     serving     — { label, amount } in the same unit as per100, or null
 //     perServing  — { cal, pro, carb, fat } for one serving, or null
 
+import {
+  extractFromOFF, extractFromUSDAPer100, extractFromUSDALabel,
+  normalizeMicros, hasAnyMicros, NUTRIENT_IDS,
+} from './nutrients.js';
+
 const OFF_BASE = 'https://world.openfoodfacts.org';
 const USDA_BASE = 'https://api.nal.usda.gov/fdc/v1';
 
@@ -60,6 +65,9 @@ export function normalizeOFFProduct(p, barcode) {
   const servingAmount = num(p.serving_quantity);
   const servingLabel = String(p.serving_size || '').trim();
 
+  const micros100 = extractFromOFF(n, '_100g');
+  const microsServing = extractFromOFF(n, '_serving');
+
   const cand = {
     key: 'off:' + (barcode || p.code || name),
     name,
@@ -68,6 +76,8 @@ export function normalizeOFFProduct(p, barcode) {
     baseUnit: offBaseUnit(p),
     per100: hasAny(per100) ? per100 : null,
     perServing: hasAny(perServing) ? perServing : null,
+    micros100: micros100,
+    microsServing: microsServing,
     serving: servingAmount > 0 ? { label: servingLabel || '1 serving', amount: servingAmount } : null,
     barcode: barcode || p.code || null,
   };
@@ -156,6 +166,9 @@ export function normalizeUSDAFood(f) {
     fat: num(L.fat?.value),
   };
 
+  const micros100 = extractFromUSDAPer100(nutrients);
+  const microsServing = extractFromUSDALabel(L);
+
   const sUnit = usdaServingUnit(f);
   const sAmount = num(f.servingSize);
   const baseUnit = sUnit === 'ml' ? 'ml' : 'g';
@@ -168,6 +181,8 @@ export function normalizeUSDAFood(f) {
     baseUnit,
     per100: hasAny(per100) ? per100 : null,
     perServing: hasAny(perServing) ? perServing : null,
+    micros100: micros100,
+    microsServing: microsServing,
     serving: sAmount > 0 && sUnit ? { label: `1 serving (${sAmount}${sUnit})`, amount: sAmount } : null,
     barcode: f.gtinUpc || null,
     stale: branded, // manufacturer-submitted; worth a nudge to double-check
@@ -281,6 +296,18 @@ export function candidateToFood(c) {
     ? `${c.brand} ${c.name}`
     : c.name;
 
+  const per100Micros = normalizeMicros(c.micros100);
+  const servingMicros = normalizeMicros(c.microsServing);
+  const servingAmount = c.serving && c.serving.amount > 0 ? c.serving.amount : 0;
+
+  // Micros have to end up on the same basis as the macros, or a 150 g yogurt
+  // logs its sodium as though it were 100 g.
+  const microsPer100 = hasAnyMicros(per100Micros)
+    ? per100Micros
+    : (hasAnyMicros(servingMicros) && servingAmount > 0
+        ? scaleObj(servingMicros, 100 / servingAmount)
+        : {});
+
   // Best case: a per-100 rate, so grams and ounces both work, with the label
   // serving kept as a named one-tap portion.
   if (c.per100) {
@@ -288,6 +315,7 @@ export function candidateToFood(c) {
     return {
       name: displayName,
       cal: c.per100.cal, pro: c.per100.pro, carb: c.per100.carb, fat: c.per100.fat,
+      micros: microsPer100,
       refAmount: 100,
       refUnit: c.baseUnit === 'ml' ? 'ml' : 'g',
       servings,
@@ -299,12 +327,13 @@ export function candidateToFood(c) {
 
   // Only a label panel and a gram weight: convert back to a per-100 rate so it
   // still scales by weight.
-  if (c.perServing && c.serving && c.serving.amount > 0) {
-    const f = 100 / c.serving.amount;
+  if (c.perServing && servingAmount > 0) {
+    const f = 100 / servingAmount;
     return {
       name: displayName,
       cal: c.perServing.cal * f, pro: c.perServing.pro * f,
       carb: c.perServing.carb * f, fat: c.perServing.fat * f,
+      micros: microsPer100,
       refAmount: 100,
       refUnit: c.baseUnit === 'ml' ? 'ml' : 'g',
       servings: [{ label: c.serving.label, amount: c.serving.amount }],
@@ -314,10 +343,12 @@ export function candidateToFood(c) {
     };
   }
 
-  // A label panel with no weight at all. Servings are all we can honestly offer.
+  // A label panel with no weight at all. Servings are all we can honestly
+  // offer, so the micros stay on a per-serving basis too.
   return {
     name: displayName,
     cal: c.perServing.cal, pro: c.perServing.pro, carb: c.perServing.carb, fat: c.perServing.fat,
+    micros: hasAnyMicros(servingMicros) ? servingMicros : per100Micros,
     refAmount: 1,
     refUnit: 'serving',
     servings: [],
@@ -325,6 +356,15 @@ export function candidateToFood(c) {
     defaultUnitId: 'serving',
     barcode: c.barcode || null,
   };
+}
+
+function scaleObj(obj, factor) {
+  const out = {};
+  for (const k of Object.keys(obj || {})) {
+    const v = Number(obj[k]);
+    if (Number.isFinite(v) && v > 0) out[k] = v * factor;
+  }
+  return out;
 }
 
 // What a result row shows so you can spot a wrong match before logging it.
@@ -344,11 +384,16 @@ export function candidateSummary(c) {
 // Shape for the shared Firestore barcode cache. Must match the key list in
 // firestore.rules exactly or the write is rejected.
 export function candidateToCache(c) {
+  // Micros are nested inside the existing per100g / perServing maps on purpose.
+  // firestore.rules restricts TOP-LEVEL keys only, so nesting means the cache
+  // can carry new nutrients without republishing rules.
+  const per100 = c.per100 ? { ...c.per100, ...normalizeMicros(c.micros100) } : null;
+  const perServ = c.perServing ? { ...c.perServing, ...normalizeMicros(c.microsServing) } : null;
   return {
     name: c.name,
     brand: c.brand || '',
-    per100g: c.per100 || null,
-    perServing: c.perServing || null,
+    per100g: per100,
+    perServing: perServ,
     servingSize: c.serving ? c.serving.amount : 0,
     servingUnit: c.serving ? c.serving.label : '',
     source: c.source,
@@ -356,16 +401,33 @@ export function candidateToCache(c) {
   };
 }
 
+function splitMacros(map) {
+  if (!map) return { macros: null, micros: {} };
+  const macros = {
+    cal: num(map.cal), pro: num(map.pro), carb: num(map.carb), fat: num(map.fat),
+  };
+  const micros = {};
+  for (const id of NUTRIENT_IDS) {
+    const v = Number(map[id]);
+    if (Number.isFinite(v) && v > 0) micros[id] = v;
+  }
+  return { macros: hasAny(macros) ? macros : null, micros };
+}
+
 export function cacheToCandidate(d, barcode) {
   if (!d) return null;
+  const a = splitMacros(d.per100g);
+  const b = splitMacros(d.perServing);
   return {
     key: 'cache:' + barcode,
     name: d.name,
     brand: d.brand || '',
     source: d.source || 'cached',
     baseUnit: 'g',
-    per100: d.per100g || null,
-    perServing: d.perServing || null,
+    per100: a.macros,
+    perServing: b.macros,
+    micros100: a.micros,
+    microsServing: b.micros,
     serving: d.servingSize > 0 ? { label: d.servingUnit || '1 serving', amount: d.servingSize } : null,
     barcode,
   };

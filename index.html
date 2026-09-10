@@ -253,6 +253,40 @@
     border-radius: 8px; pointer-events: none;
   }
   .scan-tools { display: flex; gap: 8px; margin-bottom: 12px; }
+  .scan-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: 10px; }
+
+  .micro-toggle {
+    width: 100%; background: var(--surface-raised); border: 1px solid var(--line);
+    border-radius: 10px; color: var(--text-muted); font-family: inherit; font-size: 12.5px;
+    padding: 11px 12px; cursor: pointer; text-align: left; margin: 4px 0 10px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .micro-toggle:hover { color: var(--text); }
+  .micro-fields { display: none; }
+  .micro-fields.open { display: block; }
+  .micro-group-title { font-size: 11px; color: var(--text-muted); margin: 12px 0 6px; font-weight: 500; }
+  .micro-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .micro-grid .field { margin-bottom: 4px; }
+
+  .detail-panel {
+    display: none; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; padding: 14px; margin-bottom: 18px;
+  }
+  .detail-panel.open { display: block; }
+  .detail-empty { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
+  .dgroup { margin-bottom: 14px; }
+  .dgroup:last-child { margin-bottom: 0; }
+  .dgroup h4 { font-size: 11px; color: var(--text-muted); margin: 0 0 7px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em; }
+  .drow { margin-bottom: 9px; }
+  .drow .dtop { display: flex; justify-content: space-between; align-items: baseline; font-size: 12.5px; margin-bottom: 4px; }
+  .drow .dname { color: var(--text); }
+  .drow .damt { color: var(--text-muted); font-size: 11.5px; }
+  .drow .damt strong { color: var(--text); font-weight: 500; }
+  .dbar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+  .dbar span { display: block; height: 100%; border-radius: 2px; background: var(--blue); }
+  .dbar span.high { background: var(--amber); }
+  .dbar span.over { background: var(--danger); }
+  .dv-note { font-size: 10.5px; color: var(--text-muted); margin-top: 10px; line-height: 1.5; border-top: 1px solid var(--line); padding-top: 10px; }
 
   .badge {
     display: inline-block; font-size: 9.5px; letter-spacing: 0.02em; text-transform: uppercase;
@@ -325,6 +359,12 @@
     <div class="micro-card carbs"><span class="label">Carbs</span><span class="val num" id="carbsVal">0g</span></div>
     <div class="micro-card fat"><span class="label">Fat</span><span class="val num" id="fatVal">0g</span></div>
   </div>
+
+  <div class="section-title" style="margin-top:0;">
+    <span>Nutrition detail</span>
+    <button onclick="toggleDetail()" id="detailToggleBtn">Show</button>
+  </div>
+  <div class="detail-panel" id="detailPanel"></div>
 
   <div class="goals-form" id="goalsForm">
     <div class="row">
@@ -401,6 +441,11 @@
         <div class="field"><label for="mFat">Fat g</label><input id="mFat" type="number" inputmode="decimal" placeholder="0"></div>
       </div>
 
+      <button class="micro-toggle" onclick="toggleMicroFields('m')" id="mMicroToggle">
+        <span>Cholesterol, sodium, sugars, vitamins…</span><span>+</span>
+      </button>
+      <div class="micro-fields" id="mMicroFields"></div>
+
       <div class="actions" style="margin-top:6px;">
         <button class="btn btn-primary" style="flex:1" onclick="continueFromManual()">Continue</button>
         <button class="btn btn-ghost" onclick="closeLogModal()">Cancel</button>
@@ -467,6 +512,11 @@
         <div class="field"><label for="eFat">Fat g</label><input id="eFat" type="number" inputmode="decimal"></div>
       </div>
 
+      <button class="micro-toggle" onclick="toggleMicroFields('e')" id="eMicroToggle">
+        <span>Cholesterol, sodium, sugars, vitamins…</span><span>+</span>
+      </button>
+      <div class="micro-fields" id="eMicroFields"></div>
+
       <div class="field" style="margin-top:6px;">
         <label>Named portions (optional) — e.g. “1 container” = 150</label>
         <div id="servRows"></div>
@@ -488,11 +538,21 @@
     <div class="sub" id="scanStatus">Starting camera…</div>
 
     <div class="scan-wrap" id="scanWrap">
-      <video id="scanVideo" playsinline muted></video>
+      <video id="scanVideo" playsinline autoplay muted></video>
       <div class="scan-reticle"></div>
     </div>
 
+    <div class="scan-hint" id="scanHint">
+      Fill the orange box with the barcode, bars running left to right. Hold about
+      6 inches away in good light. If it won't catch, use the photo button — your
+      camera app focuses far better than this preview can.
+    </div>
+
     <div class="scan-tools">
+      <label class="btn btn-primary" style="flex:2;text-align:center;cursor:pointer;">
+        📸 Take a photo instead
+        <input type="file" accept="image/*" capture="environment" id="photoInput" style="display:none" onchange="handlePhoto(this)">
+      </label>
       <button class="btn btn-ghost" style="flex:1;display:none;" id="torchBtn" onclick="toggleTorch()">Light</button>
     </div>
 
@@ -556,14 +616,18 @@
 <script type="module">
 import { createStore, DEFAULT_GOALS } from './store.js';
 import {
-  MEALS, inferMeal, mealLabel, normalizeFood, portionOptions, findOption,
-  scale, describePortion, trimNum, round, sumMacros, groupByMeal, UNIT_LABELS,
+  MEALS, inferMeal, normalizeFood, portionOptions,
+  scale, describePortion, trimNum, round, sumMacros, groupByMeal,
 } from './portions.js';
 import {
   searchFoods, lookupBarcode, candidateToFood, candidateSummary,
   candidateToCache, cacheToCandidate,
 } from './foodsearch.js';
-import { startScanner, cameraSupported, secureEnough } from './scanner.js';
+import { startScanner, cameraSupported, secureEnough, decodeImageFile } from './scanner.js';
+import {
+  NUTRIENT_IDS, NUTRIENT_GROUPS, NUTRIENT_BY_ID,
+  normalizeMicros, hasAnyMicros, formatAmount, pctDV,
+} from './nutrients.js';
 
 /* ---------- state ---------- */
 
@@ -613,6 +677,8 @@ function nowTime() { return new Date().toLocaleTimeString('en-US', { hour: 'nume
 
 async function boot() {
   buildMealPickers();
+  buildMicroFields('m');
+  buildMicroFields('e');
   render();
   store = await createStore();
 
@@ -734,6 +800,7 @@ function render() {
   renderRecents();
   renderPresets();
   renderLog();
+  renderDetail();
 }
 
 function renderRecents() {
@@ -886,7 +953,7 @@ async function logFoodDirect(food, foodId) {
   const m = scale(f, f.defaultQty, f.defaultUnitId);
   await store.addEntry(dateKey(viewDate), {
     name: f.name,
-    cal: m.cal, pro: m.pro, carb: m.carb, fat: m.fat,
+    cal: m.cal, pro: m.pro, carb: m.carb, fat: m.fat, micros: m.micros,
     qty: f.defaultQty,
     portionId: f.defaultUnitId,
     portionLabel: describePortion(f.defaultQty, f, f.defaultUnitId),
@@ -928,6 +995,7 @@ function openLogModal(mealId) {
   document.getElementById('searchResults').innerHTML = '';
   document.getElementById('usdaQuery').value = '';
   document.getElementById('logModalTitle').textContent = 'Log a food';
+  clearMicroFields('m');
   document.getElementById('mName').focus();
 }
 
@@ -987,8 +1055,12 @@ function refreshPreview() {
   const { qty, optId } = currentPortion();
   const m = scale(draft, qty, optId);
   document.getElementById('pvCal').textContent = round(m.cal);
+  const extras = ['sodium', 'sugars', 'fiber', 'cholesterol']
+    .filter((id) => Number(m.micros?.[id]) > 0)
+    .map((id) => `${NUTRIENT_BY_ID[id].label} ${formatAmount(id, m.micros[id])}`);
   document.getElementById('pvRest').innerHTML =
-    `cal · <span class="p">${round(m.pro)}g protein</span> · ${round(m.carb)}g carbs · ${round(m.fat)}g fat`;
+    `cal · <span class="p">${round(m.pro)}g protein</span> · ${round(m.carb)}g carbs · ${round(m.fat)}g fat` +
+    (extras.length ? `<br>${escapeHtml(extras.join(' · '))}` : '');
   document.getElementById('logItBtn').disabled = qty <= 0;
 }
 
@@ -1006,6 +1078,7 @@ function continueFromManual() {
 
   setDraft({
     name, cal, pro, carb, fat, refAmount, refUnit,
+    micros: readMicroFields('m'),
     defaultQty: refAmount, defaultUnitId: refUnit,
   }, null);
 }
@@ -1026,7 +1099,7 @@ async function submitPortion() {
 
   await store.addEntry(dateKey(viewDate), {
     name: food.name,
-    cal: m.cal, pro: m.pro, carb: m.carb, fat: m.fat,
+    cal: m.cal, pro: m.pro, carb: m.carb, fat: m.fat, micros: m.micros,
     qty, portionId: optId, portionLabel,
     meal, foodId: foodId || null,
     time: nowTime(), at: Date.now(),
@@ -1135,6 +1208,107 @@ async function connectGoogle() {
   }
 }
 
+/* ---------- micronutrient forms ---------- */
+
+// Generated from the NUTRIENTS table so adding a nutrient never means touching
+// the HTML.
+function buildMicroFields(prefix) {
+  const html = Object.entries(NUTRIENT_GROUPS).map(([group, list]) => `
+    <div class="micro-group-title">${escapeHtml(group)}</div>
+    <div class="micro-grid">
+      ${list.map((n) => `
+        <div class="field">
+          <label for="${prefix}_${n.id}">${escapeHtml(n.label)} (${n.unit})</label>
+          <input id="${prefix}_${n.id}" type="number" inputmode="decimal" step="any" placeholder="0">
+        </div>`).join('')}
+    </div>`).join('');
+  document.getElementById(prefix + 'MicroFields').innerHTML = html;
+}
+
+function toggleMicroFields(prefix) {
+  const box = document.getElementById(prefix + 'MicroFields');
+  const btn = document.getElementById(prefix + 'MicroToggle');
+  const open = box.classList.toggle('open');
+  btn.lastElementChild.textContent = open ? '−' : '+';
+}
+
+function readMicroFields(prefix) {
+  const out = {};
+  for (const id of NUTRIENT_IDS) {
+    const el = document.getElementById(prefix + '_' + id);
+    const v = el ? parseFloat(el.value) : NaN;
+    if (Number.isFinite(v) && v > 0) out[id] = v;
+  }
+  return out;
+}
+
+function writeMicroFields(prefix, micros) {
+  const m = normalizeMicros(micros);
+  for (const id of NUTRIENT_IDS) {
+    const el = document.getElementById(prefix + '_' + id);
+    if (el) el.value = m[id] != null ? trimNum(m[id]) : '';
+  }
+  // Open the section automatically when there is something in it to see.
+  const box = document.getElementById(prefix + 'MicroFields');
+  const btn = document.getElementById(prefix + 'MicroToggle');
+  const should = hasAnyMicros(m);
+  box.classList.toggle('open', should);
+  btn.lastElementChild.textContent = should ? '−' : '+';
+}
+
+function clearMicroFields(prefix) {
+  writeMicroFields(prefix, {});
+}
+
+/* ---------- daily nutrition detail ---------- */
+
+function toggleDetail() {
+  const panel = document.getElementById('detailPanel');
+  const open = panel.classList.toggle('open');
+  document.getElementById('detailToggleBtn').textContent = open ? 'Hide' : 'Show';
+  if (open) renderDetail();
+}
+
+function renderDetail() {
+  const panel = document.getElementById('detailPanel');
+  if (!panel.classList.contains('open')) return;
+
+  const totals = sumMacros(log);
+  const micros = totals.micros || {};
+
+  if (!hasAnyMicros(micros)) {
+    panel.innerHTML = `<div class="detail-empty">Nothing to show yet. Scanned and searched foods bring their own
+      cholesterol, sodium, sugars and vitamins where the database has them. For dining hall food, tap
+      <strong>+ Log a food</strong>, scroll to <strong>“Cholesterol, sodium, sugars, vitamins…”</strong> and fill in
+      what you know — anything you leave blank is simply left out rather than counted as zero.</div>`;
+    return;
+  }
+
+  panel.innerHTML = Object.entries(NUTRIENT_GROUPS).map(([group, list]) => {
+    const rows = list.filter((n) => Number(micros[n.id]) > 0);
+    if (!rows.length) return '';
+    return `<div class="dgroup">
+      <h4>${escapeHtml(group)}</h4>
+      ${rows.map((n) => {
+        const v = micros[n.id];
+        const pct = pctDV(n.id, v);
+        const width = pct == null ? 0 : Math.min(100, pct);
+        const cls = pct == null ? '' : pct > 100 ? 'over' : pct > 70 ? 'high' : '';
+        return `<div class="drow">
+          <div class="dtop">
+            <span class="dname">${escapeHtml(n.label)}</span>
+            <span class="damt"><strong>${escapeHtml(formatAmount(n.id, v))}</strong>${pct == null ? '' : ' · ' + pct + '% DV'}</span>
+          </div>
+          ${pct == null ? '' : `<div class="dbar"><span class="${cls}" style="width:${width}%"></span></div>`}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('') +
+  `<div class="dv-note">% DV is against the FDA adult Daily Value, the same reference used on packaging.
+    It is a general yardstick, not a target set for you. Totals only count foods that carried the data —
+    a low number may just mean the entry did not have it.</div>`;
+}
+
 /* ---------- search across both databases ---------- */
 
 const BADGE = {
@@ -1199,15 +1373,17 @@ function useCandidate(i) {
 function openScanner() {
   document.getElementById('scanBackdrop').classList.add('open');
   document.getElementById('manualBarcode').value = '';
+  document.getElementById('photoInput').value = '';
   const wrap = document.getElementById('scanWrap');
   const status = document.getElementById('scanStatus');
+  document.getElementById('scanHint').style.display = 'block';
 
   if (!secureEnough() || !cameraSupported()) {
     wrap.style.display = 'none';
     document.getElementById('torchBtn').style.display = 'none';
     status.textContent = !secureEnough()
-      ? 'The camera needs an https:// address. Type the digits below instead.'
-      : 'This browser will not give a web page camera access. Type the digits below instead.';
+      ? 'The camera needs an https:// address. Use the photo button or type the digits.'
+      : 'This browser will not give a web page camera access. Use the photo button or type the digits.';
     return;
   }
 
@@ -1217,6 +1393,14 @@ function openScanner() {
   startScanner({
     video: document.getElementById('scanVideo'),
     onStatus: (s) => { status.textContent = s; },
+    // Proves the decode loop is actually running, and after a while says so.
+    onProgress: (frames) => {
+      if (frames >= 80) {
+        status.textContent = 'Still looking… try the photo button, it focuses better.';
+      } else if (frames >= 24) {
+        status.textContent = 'Scanning… move a little closer or further away.';
+      }
+    },
     onResult: (code) => { handleBarcode(code); },
   })
     .then((h) => {
@@ -1229,15 +1413,44 @@ function openScanner() {
       wrap.style.display = 'none';
       status.textContent =
         (err && err.name === 'NotAllowedError')
-          ? 'Camera permission was denied. Allow it in your browser settings, or type the digits below.'
-          : (err.message || 'Could not start the camera.') + ' Type the digits below instead.';
+          ? 'Camera permission was denied. Allow it in your browser settings, or use the photo button below.'
+          : (err.message || 'Could not start the camera.') + ' Use the photo button or type the digits.';
     });
+}
+
+// The native camera app produces a far sharper image than the video preview,
+// so this reads barcodes that live scanning gives up on.
+async function handlePhoto(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  if (scanHandle) { scanHandle.stop(); scanHandle = null; }
+
+  const status = document.getElementById('scanStatus');
+  document.getElementById('scanWrap').style.display = 'none';
+  document.getElementById('scanHint').style.display = 'none';
+  document.getElementById('torchBtn').style.display = 'none';
+  status.textContent = 'Reading the photo…';
+
+  try {
+    const code = await decodeImageFile(file);
+    if (code) {
+      handleBarcode(code);
+    } else {
+      status.textContent = 'No barcode found in that photo. Try again with the barcode filling more of the frame and in focus, or type the digits below.';
+    }
+  } catch (e) {
+    console.error(e);
+    status.textContent = (e.message || 'Could not read that photo.') + ' Type the digits below instead.';
+  } finally {
+    input.value = '';
+  }
 }
 
 function closeScanner() {
   if (scanHandle) { scanHandle.stop(); scanHandle = null; }
   document.getElementById('scanBackdrop').classList.remove('open');
   document.getElementById('torchBtn').style.display = 'none';
+  document.getElementById('photoInput').value = '';
 }
 
 async function toggleTorch() {
@@ -1299,6 +1512,7 @@ function openEditStep() {
   document.getElementById('ePro').value = trimNum(draft.pro);
   document.getElementById('eCarb').value = trimNum(draft.carb);
   document.getElementById('eFat').value = trimNum(draft.fat);
+  writeMicroFields('e', draft.micros);
   servDraft = draft.servings.map((s) => ({ ...s }));
   renderServRows();
   showStep('stepEdit');
@@ -1328,6 +1542,7 @@ async function saveEditStep() {
     pro: parseFloat(document.getElementById('ePro').value) || 0,
     carb: parseFloat(document.getElementById('eCarb').value) || 0,
     fat: parseFloat(document.getElementById('eFat').value) || 0,
+    micros: readMicroFields('e'),
     servings: servDraft.filter((s) => s.label.trim() && s.amount > 0),
   };
 
@@ -1356,8 +1571,9 @@ Object.assign(window, {
   openQuickAdd, closeQuickAdd, submitQuickAdd,
   openSettingsModal, closeSettingsModal, saveUsdaKey, connectGoogle,
   runSearch, useCandidate,
-  openScanner, closeScanner, toggleTorch, lookupTypedBarcode,
+  openScanner, closeScanner, toggleTorch, lookupTypedBarcode, handlePhoto,
   openEditStep, saveEditStep, addServRow, removeServ, setServ,
+  toggleMicroFields, toggleDetail,
 });
 
 async function removeLogEntry(id) { await store.removeEntry(dateKey(viewDate), id); }
