@@ -93,6 +93,15 @@
   .over .big { color: var(--danger); }
   .over .bar-fill { background: var(--danger); }
 
+  .glance {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 11px 13px; margin-bottom: 20px; font-size: 12.5px; line-height: 1.6; color: var(--text-muted);
+  }
+  .glance b { color: var(--text); font-weight: 500; }
+  .glance .c { color: var(--amber); }
+  .glance .p { color: var(--sage); }
+  .glance .note { display: block; margin-top: 3px; font-size: 11.5px; }
+
   .micro-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
   .micro-card {
     background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
@@ -454,6 +463,8 @@
     </div>
   </div>
 
+  <div class="glance" id="glance"></div>
+
   <div class="micro-row">
     <div class="micro-card carbs"><span class="label">Carbs</span><span class="val num" id="carbsVal">0g</span></div>
     <div class="micro-card fat"><span class="label">Fat</span><span class="val num" id="fatVal">0g</span></div>
@@ -669,15 +680,24 @@
 
     <div class="scan-hint" id="scanHint">
       Fill the orange box with the barcode, bars running left to right. Hold about
-      6 inches away in good light. If it won't catch, use the photo button — your
-      camera app focuses far better than this preview can.
+      6 inches away in good light. If it won't catch, take a photo — your camera app
+      focuses far better than this preview. <b>From library</b> reads a picture you
+      already took, so you can snap labels in the shop and log them later.
     </div>
 
     <div class="scan-tools">
-      <label class="btn btn-primary" style="flex:2;text-align:center;cursor:pointer;">
-        📸 Take a photo instead
+      <label class="btn btn-primary" style="flex:1;text-align:center;cursor:pointer;">
+        📸 Take a photo
         <input type="file" accept="image/*" capture="environment" id="photoInput" style="display:none" onchange="handlePhoto(this)">
       </label>
+      <label class="btn btn-ghost" style="flex:1;text-align:center;cursor:pointer;">
+        🖼 From library
+        <!-- No capture attribute, so the OS offers the photo library rather
+             than jumping straight to the camera. -->
+        <input type="file" accept="image/*" id="libraryInput" style="display:none" onchange="handlePhoto(this)">
+      </label>
+    </div>
+    <div class="scan-tools" style="margin-top:-4px;">
       <button class="btn btn-ghost" style="flex:1;display:none;" id="torchBtn" onclick="toggleTorch()">Light</button>
     </div>
 
@@ -977,6 +997,7 @@ function render() {
     document.getElementById('goalFatInput').value = goals.fat || '';
   }
 
+  renderGlance(t);
   renderRecents();
   renderPresets();
   renderLog();
@@ -1791,6 +1812,57 @@ async function saveEntryEdit() {
   toast('Entry updated');
 }
 
+/* ---------- today at a glance ---------- */
+
+// One plain line answering "where am I", so the app is useful in a two-second
+// glance without reading four cards and a list.
+function renderGlance(totals) {
+  const el = document.getElementById('glance');
+  const isToday = dateKey(viewDate) === dateKey(new Date());
+  const groups = groupByMeal(log).filter((g) => g.entries.length);
+  const items = log.length;
+
+  if (items === 0) {
+    el.innerHTML = isToday
+      ? 'Nothing logged yet today. <b>' + goals.calories + '</b> cal and <b>' + goals.protein + 'g</b> protein to work with.'
+      : 'Nothing was logged on this day.';
+    return;
+  }
+
+  const calLeft = goals.calories - totals.cal;
+  const proLeft = goals.protein - totals.pro;
+  const mealWord = groups.length === 1 ? 'meal' : 'meals';
+  const itemWord = items === 1 ? 'item' : 'items';
+
+  if (!isToday) {
+    el.innerHTML =
+      `<b class="c">${round(totals.cal)}</b> cal and <b class="p">${round(totals.pro)}g</b> protein, ` +
+      `${items} ${itemWord} across ${groups.length} ${mealWord}.`;
+    return;
+  }
+
+  const calPart = calLeft >= 0
+    ? `<b class="c">${round(calLeft)}</b> cal left`
+    : `<b class="c">${round(-calLeft)}</b> cal over`;
+  const proPart = proLeft > 0
+    ? `<b class="p">${round(proLeft)}g</b> protein to go`
+    : `protein goal met`;
+
+  let note = '';
+  // Protein is the macro most easily missed by the end of the day, and it is
+  // the one worth a nudge. No commentary on calories — a number on a screen
+  // should not be telling you to eat less.
+  if (proLeft > 0 && totals.cal > 0) {
+    const calShare = totals.cal / (goals.calories || 1);
+    const proShare = totals.pro / (goals.protein || 1);
+    if (calShare > 0.55 && proShare < calShare - 0.15) {
+      note = `<span class="note">Protein is running behind calories today — worth a higher-protein pick next.</span>`;
+    }
+  }
+
+  el.innerHTML = `${calPart} · ${proPart} · <b>${items}</b> ${itemWord} in ${groups.length} ${mealWord}.${note}`;
+}
+
 /* ---------- micronutrient forms ---------- */
 
 // Generated from the NUTRIENTS table so adding a nutrient never means touching
@@ -1968,6 +2040,7 @@ function openScanner() {
   document.getElementById('scanBackdrop').classList.add('open');
   document.getElementById('manualBarcode').value = '';
   document.getElementById('photoInput').value = '';
+  document.getElementById('libraryInput').value = '';
   document.getElementById('scanWrap').classList.remove('hit');
   const wrap = document.getElementById('scanWrap');
   const status = document.getElementById('scanStatus');
@@ -2043,7 +2116,7 @@ async function handlePhoto(input) {
       status.textContent = 'Got it: ' + code;
       handleBarcode(code);
     } else {
-      status.textContent = 'No barcode found in that photo. Try again with the barcode filling more of the frame and in focus, or type the digits below.';
+      status.textContent = 'No barcode found in that image. It needs the barcode reasonably large, in focus, and not at a steep angle — cropping the photo to just the barcode usually does it. Or type the digits below.';
     }
   } catch (e) {
     console.error(e);
@@ -2068,6 +2141,7 @@ function closeScanner() {
   document.getElementById('scanBackdrop').classList.remove('open');
   document.getElementById('torchBtn').style.display = 'none';
   document.getElementById('photoInput').value = '';
+  document.getElementById('libraryInput').value = '';
 }
 
 async function toggleTorch() {
