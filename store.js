@@ -28,6 +28,7 @@ const PREFIX = "fuellog:";
 const PRESETS_KEY = PREFIX + "presets";
 const GOALS_KEY = PREFIX + "goals";
 const RECENT_KEY = PREFIX + "recent";
+const WEIGHTS_KEY = PREFIX + "weights";
 const dayStorageKey = (k) => PREFIX + "log:" + k;
 
 const RECENT_MAX = 20;
@@ -130,7 +131,7 @@ class LocalStore {
   constructor() {
     this.mode = "local";
     this.fellBack = false;
-    this._cbs = { status: null, goals: null, foods: null, recent: null };
+    this._cbs = { status: null, goals: null, foods: null, recent: null, weights: null };
     this._day = { key: null, cb: null };
   }
 
@@ -255,6 +256,31 @@ class LocalStore {
     const next = mergeRecent(loadJSON(RECENT_KEY, []), food);
     saveJSON(RECENT_KEY, next);
     if (this._cbs.recent) this._cbs.recent(next);
+  }
+
+  onWeights(cb) {
+    this._cbs.weights = cb;
+    cb(loadJSON(WEIGHTS_KEY, {}));
+  }
+
+  async setWeight(dayKey, lbs) {
+    const all = loadJSON(WEIGHTS_KEY, {});
+    const v = Number(lbs);
+    if (Number.isFinite(v) && v > 0) all[dayKey] = v;
+    else delete all[dayKey];
+    saveJSON(WEIGHTS_KEY, all);
+    if (this._cbs.weights) this._cbs.weights(all);
+  }
+
+  // Daily calorie totals for a set of dates, for the trend and TDEE maths.
+  async getDayTotals(dayKeys) {
+    const out = {};
+    for (const k of dayKeys) {
+      const entries = loadJSON(dayStorageKey(k), []);
+      if (!entries.length) continue;
+      out[k] = entries.reduce((a, e) => a + (Number(e.cal) || 0), 0);
+    }
+    return out;
   }
 
   async getCachedBarcode(upc) {
@@ -549,6 +575,47 @@ class CloudStore {
   async noteRecent(food) {
     const next = mergeRecent(this._userData.recent || [], food);
     await this.fb.setDoc(this._userRef, { recent: next }, { merge: true });
+  }
+
+  onWeights(cb) {
+    const { onSnapshot, collection, db } = this.fb;
+    onSnapshot(
+      collection(db, "users", this.uid, "weights"),
+      (qs) => {
+        const out = {};
+        qs.docs.forEach((d) => {
+          const v = Number(d.data().lbs);
+          if (Number.isFinite(v) && v > 0) out[d.id] = v;
+        });
+        cb(out);
+      },
+      (err) => console.error("weights listener", err)
+    );
+  }
+
+  async setWeight(dayKey, lbs) {
+    const { doc, setDoc, deleteDoc, db } = this.fb;
+    const ref = doc(db, "users", this.uid, "weights", dayKey);
+    const v = Number(lbs);
+    if (Number.isFinite(v) && v > 0) await setDoc(ref, { lbs: v, at: Date.now() });
+    else await deleteDoc(ref);
+  }
+
+  // Reads several days at once for the trend and TDEE maths. With offline
+  // persistence on, days already cached cost nothing.
+  async getDayTotals(dayKeys) {
+    const results = await Promise.all(
+      dayKeys.map(async (k) => {
+        try {
+          const entries = await this.getDayEntries(k);
+          if (!entries.length) return null;
+          return [k, entries.reduce((a, e) => a + (Number(e.cal) || 0), 0)];
+        } catch {
+          return null;
+        }
+      })
+    );
+    return Object.fromEntries(results.filter(Boolean));
   }
 
   // The barcode cache is shared across all users of the app, so the second

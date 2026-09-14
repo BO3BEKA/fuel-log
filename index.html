@@ -267,6 +267,33 @@
     display: flex; flex-direction: column; gap: 4px;
   }
   .new-product b { color: var(--amber); font-weight: 500; }
+
+  .weigh-row { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px; }
+  .weigh-row .field { flex: 1; margin: 0; }
+  .insight-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+  .insight-card .ihead { font-size: 11px; color: var(--text-muted); margin-bottom: 5px; }
+  .insight-card .ibig { font-family: 'Space Grotesk', sans-serif; font-size: 25px; font-weight: 700; line-height: 1; }
+  .insight-card .isub { font-size: 11.5px; color: var(--text-muted); margin-top: 5px; line-height: 1.5; }
+  .conf { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.03em; padding: 2px 6px;
+          border-radius: 4px; border: 1px solid var(--line); color: var(--text-muted); margin-left: 6px; vertical-align: middle; }
+  .conf.good { color: var(--sage); border-color: rgba(91,156,122,0.4); }
+  .conf.fair { color: var(--blue); border-color: rgba(111,155,209,0.4); }
+  .conf.rough { color: var(--amber); border-color: rgba(232,150,60,0.4); }
+  .spark { display: flex; align-items: flex-end; gap: 2px; height: 34px; margin-top: 10px; }
+  .spark i { flex: 1; background: var(--line); border-radius: 1px; min-height: 2px; }
+  .spark i.on { background: var(--sage); }
+
+  .psplit { display: flex; gap: 3px; height: 6px; border-radius: 3px; overflow: hidden; margin: 8px 0 6px; background: var(--line); }
+  .psplit b { display: block; background: var(--sage); }
+  .psplit b:nth-child(2) { background: #6fae8c; }
+  .psplit b:nth-child(3) { background: #85c0a0; }
+  .psplit b:nth-child(4) { background: #9dd2b5; }
+  .plegend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 11px; color: var(--text-muted); }
+
+  .lib-search { margin-bottom: 8px; }
+  .lib-search input { width: 100%; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; color: var(--text); font-family: inherit; font-size: 13px; padding: 9px 11px; }
+  .log-item .left { cursor: pointer; flex: 1; }
   .scan-diag .bad { color: var(--danger); }
   .scan-diag .good { color: var(--sage); }
   .scan-wrap.hit .scan-reticle { border-color: var(--sage); background: rgba(91,156,122,0.18); }
@@ -377,6 +404,12 @@
   </div>
 
   <div class="section-title" style="margin-top:0;">
+    <span>Weight &amp; trends</span>
+    <button onclick="toggleInsights()" id="insightsToggleBtn">Show</button>
+  </div>
+  <div class="detail-panel" id="insightsPanel"></div>
+
+  <div class="section-title" style="margin-top:0;">
     <span>Nutrition detail</span>
     <button onclick="toggleDetail()" id="detailToggleBtn">Show</button>
   </div>
@@ -407,6 +440,9 @@
   <div class="section-title">
     Quick add
     <button onclick="toggleEdit()" id="editToggleBtn">Edit spots</button>
+  </div>
+  <div class="lib-search" id="libSearchWrap" style="display:none;">
+    <input id="libSearch" placeholder="Filter your foods…" oninput="renderPresets()">
   </div>
   <div class="presets" id="presetsGrid"></div>
 
@@ -616,6 +652,35 @@
   </div>
 </div>
 
+<!-- ===================== Edit a logged entry ===================== -->
+<div class="modal-backdrop" id="entryBackdrop" onclick="if(event.target===this) closeEntryEdit()">
+  <div class="modal">
+    <h2 id="entryTitle">Edit entry</h2>
+    <div class="sub" id="entrySub"></div>
+
+    <div class="qty-row">
+      <div class="field" style="margin:0"><label for="entryQty">Amount</label>
+        <input id="entryQty" type="number" inputmode="decimal" step="any" oninput="refreshEntryPreview()"></div>
+      <div class="field" style="margin:0"><label>Unit</label>
+        <input id="entryUnit" disabled></div>
+    </div>
+
+    <div class="preview">
+      <span class="pcal num" id="evCal">0</span>
+      <span class="prest" id="evRest">cal</span>
+    </div>
+
+    <div class="field" style="margin-bottom:8px;"><label>Meal</label>
+      <div class="meal-picker" id="entryMealPicker"></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn btn-primary" style="flex:1" onclick="saveEntryEdit()">Save</button>
+      <button class="btn btn-ghost" onclick="closeEntryEdit()">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===================== Settings ===================== -->
 <div class="modal-backdrop" id="settingsBackdrop" onclick="if(event.target===this) closeSettingsModal()">
   <div class="modal settings-modal">
@@ -651,6 +716,10 @@ import {
 } from './foodsearch.js';
 import { startScanner, cameraSupported, secureEnough, decodeImageFile, successFeedback, SCANNER_BUILD } from './scanner.js';
 import {
+  estimateTDEE, movingAverage, describeTrend, proteinSplit,
+  averageIntake, lastNDayKeys,
+} from './insights.js';
+import {
   NUTRIENT_IDS, NUTRIENT_GROUPS, NUTRIENT_BY_ID,
   normalizeMicros, hasAnyMicros, formatAmount, pctDV,
 } from './nutrients.js';
@@ -670,6 +739,11 @@ let candidates = {};
 let scanHandle = null;
 let servDraft = [];
 let pendingBarcode = null;
+let weights = {};
+let intakeHistory = {};
+let historyLoaded = false;
+let editingEntry = null;
+let entryMeal = 'snack';
 
 // The food being logged right now, plus the chosen portion and meal.
 let draft = null;          // normalized food
@@ -713,6 +787,7 @@ async function boot() {
   store.onGoals((g) => { goals = g; render(); });
   store.onFoods((f) => { foods = f; render(); });
   store.onRecent((r) => { recents = r; render(); });
+  store.onWeights((w) => { weights = w; renderInsights(); });
   watchCurrentDay();
 
   ready = true;
@@ -728,6 +803,9 @@ function watchCurrentDay() {
   unwatchDay = store.watchDay(key, (entries) => {
     if (dateKey(viewDate) !== key) return; // stale snapshot from a day we left
     log = entries;
+    if (intakeHistory[key] !== undefined || dateKey(new Date()) === key) {
+      intakeHistory[key] = entries.reduce((a, e) => a + (Number(e.cal) || 0), 0);
+    }
     render();
   });
 }
@@ -828,6 +906,7 @@ function render() {
   renderPresets();
   renderLog();
   renderDetail();
+  renderInsights();
 }
 
 function renderRecents() {
@@ -850,7 +929,16 @@ function renderPresets() {
     grid.innerHTML = '<div class="grid-note">Loading your foods…</div>';
     return;
   }
-  const list = sortedFoods();
+  const q = (document.getElementById('libSearch')?.value || '').trim().toLowerCase();
+  const all = sortedFoods();
+  // The filter only earns its place once the grid is big enough to be annoying.
+  document.getElementById('libSearchWrap').style.display = all.length >= 8 ? 'block' : 'none';
+  const list = q ? all.filter((f) => f.name.toLowerCase().includes(q)) : all;
+
+  if (q && !list.length) {
+    grid.innerHTML = '<div class="grid-note">No saved food matches that.</div>';
+    return;
+  }
   if (!list.length) {
     grid.innerHTML = '<div class="grid-note">No quick adds yet. Log a food and tick “save as a quick-add spot”.</div>';
     return;
@@ -888,7 +976,7 @@ function renderLog() {
       const meta = [e.portionLabel, e.time].filter(Boolean).join(' · ');
       return `
         <div class="log-item">
-          <div class="left">
+          <div class="left" onclick="openEntryEdit('${e.id}')" role="button" tabindex="0">
             <span class="name">${escapeHtml(e.name)}</span>
             <span class="meta">${escapeHtml(meta)}</span>
           </div>
@@ -925,6 +1013,8 @@ function buildMealPickers() {
   ).join('');
   document.getElementById('mealPicker').innerHTML = html('mp');
   document.getElementById('quickMealPicker').innerHTML = html('qp');
+  document.getElementById('entryMealPicker').innerHTML = MEALS.map((m) =>
+    `<button class="meal-btn" id="ep-${m.id}" onclick="setEntryMeal('${m.id}')">${m.label}</button>`).join('');
 }
 function paintMealPicker(prefix, active) {
   MEALS.forEach((m) => {
@@ -934,6 +1024,7 @@ function paintMealPicker(prefix, active) {
 }
 function setDraftMeal(id) { draftMeal = id; paintMealPicker('mp', id); }
 function setQuickMeal(id) { quickMeal = id; paintMealPicker('qp', id); }
+function setEntryMeal(id) { entryMeal = id; paintMealPicker('ep', id); }
 
 /* ---------- day navigation ---------- */
 
@@ -1245,6 +1336,216 @@ async function connectGoogle() {
     btn.disabled = false;
     btn.textContent = 'Keep my data — sign in with Google';
   }
+}
+
+/* ---------- weight, trends and TDEE ---------- */
+
+function toggleInsights() {
+  const panel = document.getElementById('insightsPanel');
+  const open = panel.classList.toggle('open');
+  document.getElementById('insightsToggleBtn').textContent = open ? 'Hide' : 'Show';
+  if (open) { loadHistory(); renderInsights(); }
+}
+
+// 28 days is enough for a stable TDEE read without making the first open slow.
+async function loadHistory() {
+  if (historyLoaded) return;
+  try {
+    intakeHistory = await store.getDayTotals(lastNDayKeys(dateKey(new Date()), 28));
+    historyLoaded = true;
+    renderInsights();
+  } catch (e) {
+    console.error('history load failed', e);
+  }
+}
+
+function renderInsights() {
+  const panel = document.getElementById('insightsPanel');
+  if (!panel.classList.contains('open')) return;
+
+  const todayKey = dateKey(new Date());
+  const intake = { ...intakeHistory };
+  // The day on screen is live, so use its running total rather than a stale read.
+  if (dateKey(viewDate) === todayKey) intake[todayKey] = sumMacros(log).cal;
+
+  const series = Object.keys(weights).sort().map((k) => ({ key: k, value: weights[k] }));
+  const smoothed = movingAverage(series, 7);
+  const latest = smoothed[smoothed.length - 1] || null;
+
+  const week = averageIntake(intake, lastNDayKeys(todayKey, 7));
+  const tdee = estimateTDEE(intake, weights);
+
+  let html = `
+    <div class="weigh-row">
+      <div class="field">
+        <label for="weightInput">Weight today (lb)</label>
+        <input id="weightInput" type="number" inputmode="decimal" step="any"
+               placeholder="${latest ? trimNum(latest.value) : '180'}"
+               value="${weights[todayKey] != null ? trimNum(weights[todayKey]) : ''}">
+      </div>
+      <button class="btn btn-primary" onclick="saveWeight()">Save</button>
+    </div>`;
+
+  if (latest) {
+    const spark = smoothed.slice(-21);
+    const vals = spark.map((p) => p.avg);
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    const bars = spark.map((p) => {
+      const h = hi === lo ? 50 : ((p.avg - lo) / (hi - lo)) * 100;
+      return `<i class="on" style="height:${Math.max(6, h)}%"></i>`;
+    }).join('');
+    html += `
+      <div class="insight-card">
+        <div class="ihead">Weight trend (7-day average)</div>
+        <div class="ibig num">${trimNum(Math.round(latest.avg * 10) / 10)} lb</div>
+        <div class="isub">Last reading ${trimNum(latest.value)} lb.
+          Daily weight swings a few pounds on water alone, so the average is the number to watch.</div>
+        ${spark.length > 2 ? `<div class="spark">${bars}</div>` : ''}
+      </div>`;
+  }
+
+  html += `
+    <div class="insight-card">
+      <div class="ihead">Average intake, last 7 days</div>
+      <div class="ibig num" style="color:var(--amber)">${round(week.average)}</div>
+      <div class="isub">${week.days === 0 ? 'Nothing logged this week yet.'
+        : `Across ${week.days} logged day${week.days === 1 ? '' : 's'}. Unlogged days are skipped, not counted as zero.`}</div>
+    </div>`;
+
+  if (tdee.ok) {
+    html += `
+      <div class="insight-card">
+        <div class="ihead">Your maintenance calories<span class="conf ${tdee.confidence}">${tdee.confidence}</span></div>
+        <div class="ibig num" style="color:var(--sage)">${tdee.tdee}</div>
+        <div class="isub">Worked out from what you actually ate and what your weight actually did over
+          ${tdee.days} days — not a formula. You averaged ${tdee.meanIntake} cal and you're
+          ${escapeHtml(describeTrend(tdee.lbsPerWeek))}.
+          ${tdee.confidence === 'rough'
+            ? 'Treat it loosely for now; it firms up as you log more days.'
+            : `Based on ${tdee.loggedDays} logged days and ${tdee.weighIns} weigh-ins.`}</div>
+      </div>`;
+  } else {
+    const need = tdee.reason === 'weigh-ins'
+      ? `${tdee.need} weigh-ins (you have ${tdee.have})`
+      : tdee.reason === 'span'
+        ? `weigh-ins spread over at least ${tdee.need} days (yours span ${tdee.have})`
+        : `${tdee.need} logged days inside that window (you have ${tdee.have})`;
+    html += `
+      <div class="insight-card">
+        <div class="ihead">Your maintenance calories</div>
+        <div class="isub">Not enough to work this out yet — it needs ${escapeHtml(need)}.
+          Weigh yourself most mornings, same time, and keep logging. Once there's enough,
+          this tells you what you actually burn instead of what a calculator guesses.</div>
+      </div>`;
+  }
+
+  // Protein distribution for the day on screen.
+  const split = proteinSplit(groupByMeal(log));
+  if (split.total > 0) {
+    const bars = split.rows.filter((r) => r.protein > 0)
+      .map((r) => `<b style="flex:${r.protein}"></b>`).join('');
+    const legend = split.rows.filter((r) => r.protein > 0)
+      .map((r) => `<span>${escapeHtml(r.label)} ${round(r.protein)}g</span>`).join('');
+    html += `
+      <div class="insight-card">
+        <div class="ihead">Protein across the day</div>
+        <div class="psplit">${bars}</div>
+        <div class="plegend">${legend}</div>
+        ${split.lopsided
+          ? `<div class="isub">${round(split.biggest.pct)}% of it is in ${escapeHtml(split.biggest.label.toLowerCase())}.
+             Spreading protein more evenly across meals is generally used better than one large hit.</div>`
+          : ''}
+      </div>`;
+  }
+
+  panel.innerHTML = html;
+}
+
+async function saveWeight() {
+  const el = document.getElementById('weightInput');
+  const v = parseFloat(el.value);
+  if (!Number.isFinite(v) || v <= 0) { el.focus(); return; }
+  await store.setWeight(dateKey(viewDate), v);
+  toast('Weight saved');
+}
+
+/* ---------- editing a logged entry ---------- */
+
+// Entries store the macros they were logged with, so editing scales them
+// proportionally. That works no matter what unit was used, and keeps working
+// even if the original food has since been deleted or changed.
+function openEntryEdit(id) {
+  const e = log.find((x) => x.id === id);
+  if (!e) return;
+  editingEntry = e;
+  entryMeal = e.meal || inferMeal(new Date(Number(e.at) || Date.now()));
+  paintMealPicker('ep', entryMeal);
+
+  document.getElementById('entryTitle').textContent = e.name;
+  document.getElementById('entrySub').textContent = 'Logged at ' + (e.time || 'an unknown time');
+  document.getElementById('entryQty').value = trimNum(e.qty || 1);
+  document.getElementById('entryUnit').value = e.portionLabel || 'serving';
+  refreshEntryPreview();
+  document.getElementById('entryBackdrop').classList.add('open');
+  setTimeout(() => document.getElementById('entryQty').select(), 30);
+}
+
+function entryFactor() {
+  const e = editingEntry;
+  if (!e) return 0;
+  const oldQty = Number(e.qty) || 1;
+  const newQty = parseFloat(document.getElementById('entryQty').value);
+  if (!Number.isFinite(newQty) || newQty <= 0) return 0;
+  return newQty / oldQty;
+}
+
+function refreshEntryPreview() {
+  const e = editingEntry;
+  if (!e) return;
+  const f = entryFactor();
+  document.getElementById('evCal').textContent = round((Number(e.cal) || 0) * f);
+  document.getElementById('evRest').innerHTML =
+    `cal · <span class="p">${round((Number(e.pro) || 0) * f)}g protein</span> · ` +
+    `${round((Number(e.carb) || 0) * f)}g carbs · ${round((Number(e.fat) || 0) * f)}g fat`;
+}
+
+function closeEntryEdit() {
+  document.getElementById('entryBackdrop').classList.remove('open');
+  editingEntry = null;
+}
+
+async function saveEntryEdit() {
+  const e = editingEntry;
+  if (!e) return;
+  const f = entryFactor();
+  if (f <= 0) return;
+
+  const newQty = parseFloat(document.getElementById('entryQty').value);
+  const scaledMicros = {};
+  for (const id of NUTRIENT_IDS) {
+    const v = Number(e.micros?.[id]);
+    if (Number.isFinite(v) && v > 0) scaledMicros[id] = v * f;
+  }
+  // Rebuild the portion text so "250 g" becomes "150 g" rather than going stale.
+  const unitText = (e.portionLabel || '').replace(/^[\d.,]+\s*(×\s*)?/, '').trim();
+  const newLabel = unitText ? `${trimNum(newQty)} ${unitText}` : e.portionLabel;
+
+  const dayK = dateKey(viewDate);
+  closeEntryEdit();
+
+  await store.removeEntry(dayK, e.id);
+  await store.addEntry(dayK, {
+    ...e,
+    cal: (Number(e.cal) || 0) * f,
+    pro: (Number(e.pro) || 0) * f,
+    carb: (Number(e.carb) || 0) * f,
+    fat: (Number(e.fat) || 0) * f,
+    micros: scaledMicros,
+    qty: newQty,
+    portionLabel: newLabel,
+    meal: entryMeal,
+  });
+  toast('Entry updated');
 }
 
 /* ---------- micronutrient forms ---------- */
@@ -1667,6 +1968,8 @@ Object.assign(window, {
   openScanner, closeScanner, toggleTorch, lookupTypedBarcode, handlePhoto, copyDiag,
   openEditStep, saveEditStep, addServRow, removeServ, setServ,
   toggleMicroFields, toggleDetail,
+  toggleInsights, saveWeight, renderPresets,
+  openEntryEdit, closeEntryEdit, saveEntryEdit, refreshEntryPreview, setEntryMeal,
 });
 
 async function removeLogEntry(id) { await store.removeEntry(dateKey(viewDate), id); }
