@@ -4,7 +4,7 @@
 // new version installs in the background, the app notices and offers a Reload,
 // and old caches are deleted on activation. It replaces the ?v=N trick.
 
-const CACHE_VERSION = 'fuel-log-v3';
+const CACHE_VERSION = 'fuel-log-v4';
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const VENDOR_CACHE = `${CACHE_VERSION}-vendor`;
 
@@ -19,6 +19,7 @@ const SHELL = [
   './foodsearch.js',
   './scanner.js',
   './firebase-config.js',
+  './app-config.js',
   './manifest.webmanifest',
   './icon-192.png',
   './icon-512.png',

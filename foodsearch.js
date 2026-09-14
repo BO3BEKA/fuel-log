@@ -201,8 +201,12 @@ export async function usdaSearch(query, apiKey, limit = 8) {
     `&dataType=${encodeURIComponent('Branded,Foundation,SR Legacy')}`;
   const res = await fetch(url);
   if (!res.ok) {
+    // 429 means the key is over its hourly allowance, which is a completely
+    // different problem from a key that is wrong, so the two are kept apart.
     const err = new Error('USDA search failed with status ' + res.status);
     err.status = res.status;
+    err.rateLimited = res.status === 429;
+    err.badKey = res.status === 403 || res.status === 401;
     throw err;
   }
   const data = await res.json();
@@ -237,9 +241,16 @@ export async function searchFoods(query, { usdaKey } = {}) {
   const errors = [];
   if (offRes.status === 'rejected') errors.push('Open Food Facts unreachable');
   if (usdaRes.status === 'rejected') {
-    errors.push(usdaRes.reason?.status === 403 ? 'USDA key rejected' : 'USDA unreachable');
+    const r = usdaRes.reason || {};
+    if (r.rateLimited) {
+      errors.push('USDA hourly limit reached — add your own key in Settings to skip the queue');
+    } else if (r.badKey) {
+      errors.push('USDA key rejected — check it in Settings');
+    } else {
+      errors.push('USDA unreachable');
+    }
   }
-  if (!usdaKey) errors.push('No USDA key set');
+  if (!usdaKey) errors.push('No USDA key, so these are Open Food Facts results only');
 
   // USDA reference entries first (authoritative for real ingredients), then
   // Open Food Facts branded, then USDA branded last since it's the stalest.

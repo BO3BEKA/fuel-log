@@ -780,11 +780,11 @@
 <div class="modal-backdrop" id="settingsBackdrop" onclick="if(event.target===this) closeSettingsModal()">
   <div class="modal settings-modal">
     <h2>Settings</h2>
-    <div class="sub">USDA FoodData Central connects the search bar to a real nutrition database.</div>
+    <div class="sub" id="usdaSub">Search uses Open Food Facts and USDA FoodData Central together.</div>
     <div class="field">
-      <label for="usdaKeyInput">USDA API key</label>
-      <input id="usdaKeyInput" placeholder="Paste your key here">
-      <small>Free, instant, no payment info required. Get one at <a href="https://fdc.nal.usda.gov/api-key-signup.html" target="_blank" rel="noopener">fdc.nal.usda.gov/api-key-signup.html</a>, then paste it here. Stored only in this browser.</small>
+      <label for="usdaKeyInput">Your own USDA API key (optional)</label>
+      <input id="usdaKeyInput" placeholder="Only needed if searches get rate limited">
+      <small id="usdaHelp"></small>
     </div>
     <div class="actions">
       <button class="btn btn-primary" style="flex:1" onclick="saveUsdaKey()">Save key</button>
@@ -827,6 +827,7 @@ import {
   candidateToCache, cacheToCandidate, foodToCacheEntry,
 } from './foodsearch.js';
 import { startScanner, cameraSupported, secureEnough, decodeImageFile, successFeedback, SCANNER_BUILD } from './scanner.js';
+import { USDA_SHARED_KEY, hasSharedUsdaKey } from './app-config.js';
 import {
   estimateTDEE, movingAverage, describeTrend, proteinSplit,
   averageIntake, lastNDayKeys,
@@ -864,6 +865,12 @@ let draftMeal = 'snack';
 let quickMeal = 'snack';
 
 const USDA_KEY_STORAGE = 'fuellog:usdaKey';
+
+// A personal key always wins, because it has its own hourly allowance. The
+// shared key is the fallback so search works out of the box.
+function usdaKey() {
+  return localStorage.getItem(USDA_KEY_STORAGE) || (hasSharedUsdaKey ? USDA_SHARED_KEY : '');
+}
 
 /* ---------- dates ---------- */
 
@@ -1443,8 +1450,24 @@ async function saveGoals() {
   await store.setGoals(next);
 }
 
+function renderUsdaHelp() {
+  const help = document.getElementById('usdaHelp');
+  const personal = localStorage.getItem(USDA_KEY_STORAGE);
+  if (personal) {
+    help.innerHTML = 'Using your own key, which has its own hourly allowance. Clear the box and save to go back to the shared one. Stored only in this browser.';
+  } else if (hasSharedUsdaKey) {
+    help.innerHTML = 'A shared key is already built in, so search works without doing anything. ' +
+      'It is capped at about 1,000 requests an hour across everyone using the app, so if you ever see ' +
+      '“hourly limit reached”, grab a free one at <a href="https://fdc.nal.usda.gov/api-key-signup.html" target="_blank" rel="noopener">fdc.nal.usda.gov</a> and paste it here.';
+  } else {
+    help.innerHTML = 'No USDA key is set, so search is Open Food Facts only — fine for branded products, ' +
+      'weaker on plain ingredients. Get a free key at <a href="https://fdc.nal.usda.gov/api-key-signup.html" target="_blank" rel="noopener">fdc.nal.usda.gov</a> and paste it here.';
+  }
+}
+
 function openSettingsModal() {
   document.getElementById('usdaKeyInput').value = localStorage.getItem(USDA_KEY_STORAGE) || '';
+  renderUsdaHelp();
   renderAccountBlock();
   renderInstallBlock();
   document.getElementById('settingsBackdrop').classList.add('open');
@@ -1454,7 +1477,9 @@ function saveUsdaKey() {
   const key = document.getElementById('usdaKeyInput').value.trim();
   if (key) localStorage.setItem(USDA_KEY_STORAGE, key);
   else localStorage.removeItem(USDA_KEY_STORAGE);
+  renderUsdaHelp();
   closeSettingsModal();
+  toast(key ? 'Using your own USDA key' : (hasSharedUsdaKey ? 'Back to the shared key' : 'USDA key cleared'));
 }
 async function connectGoogle() {
   const btn = document.getElementById('linkGoogleBtn');
@@ -2207,9 +2232,7 @@ async function runSearch() {
 
   el.innerHTML = '<div class="search-status">Searching Open Food Facts and USDA…</div>';
   try {
-    const { results, errors } = await searchFoods(query, {
-      usdaKey: localStorage.getItem(USDA_KEY_STORAGE),
-    });
+    const { results, errors } = await searchFoods(query, { usdaKey: usdaKey() });
     renderCandidates(results, errors.length ? errors.join('. ') + '.' : '');
   } catch (e) {
     console.error(e);
@@ -2387,7 +2410,7 @@ async function handleBarcode(code) {
   if (!cand) {
     status.textContent = 'Checking Open Food Facts and USDA…';
     try {
-      cand = await lookupBarcode(code, { usdaKey: localStorage.getItem(USDA_KEY_STORAGE) });
+      cand = await lookupBarcode(code, { usdaKey: usdaKey() });
       if (cand) store.cacheBarcode(code, candidateToCache(cand));
     } catch (e) {
       console.error(e);
