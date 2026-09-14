@@ -1,0 +1,82 @@
+name: Dining menus
+
+# Pulls Vanderbilt dining menus once a day and commits the result.
+#
+# This runs on GitHub's servers rather than in the browser because
+# NetNutrition sends no CORS headers — a fetch() from the live site would be
+# blocked before it left the browser. GitHub Actions has no such restriction,
+# and committing the output means the app reads it same-origin.
+
+on:
+  schedule:
+    # 09:00 UTC ≈ 4am Central, so the day's menus are ready before breakfast
+    # and the run lands when their servers are quiet.
+    - cron: '0 9 * * *'
+  # Lets you trigger it by hand from the Actions tab, which is how you will
+  # run it the first time.
+  workflow_dispatch:
+    inputs:
+      units:
+        description: 'Dining halls to pull (comma separated, matched loosely)'
+        required: false
+        default: 'rand,commons,kissam,zeppos,ebi,e. bronson'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dining-scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install the HTML parser
+        run: npm install cheerio@1.0.0 --no-save --no-audit --no-fund
+
+      - name: Scrape the menus
+        id: scrape
+        env:
+          DINING_UNITS: ${{ github.event.inputs.units || 'rand,commons,kissam,zeppos,ebi,e. bronson' }}
+        # Keeps going on failure so the debug files still get uploaded — a
+        # failed run that tells you why is worth more than one that vanishes.
+        continue-on-error: true
+        run: node scripts/scrape-dining.mjs
+
+      - name: Upload debug output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dining-debug
+          path: dining/debug/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Commit the menus
+        if: steps.scrape.outcome == 'success'
+        run: |
+          git config user.name  "fuel-log bot"
+          git config user.email "actions@github.com"
+          git add dining/menu.json dining/nutrition-cache.json
+          if git diff --staged --quiet; then
+            echo "Menus unchanged; nothing to commit."
+          else
+            git commit -m "Dining menus $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Fail the run if the scrape failed
+        if: steps.scrape.outcome != 'success'
+        run: |
+          echo "The scrape failed. Download the dining-debug artifact above —"
+          echo "it contains the raw responses and shows which stage broke."
+          exit 1
