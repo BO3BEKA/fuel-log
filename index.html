@@ -93,6 +93,7 @@
   .over .big { color: var(--danger); }
   .over .bar-fill { background: var(--danger); }
 
+  .tier-break { height: 1px; background: var(--line); margin: 30px 0 4px; }
   .glance {
     background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
     padding: 11px 13px; margin-bottom: 20px; font-size: 12.5px; line-height: 1.6; color: var(--text-muted);
@@ -397,10 +398,15 @@
   .toast {
     position: fixed; left: 50%; transform: translateX(-50%); bottom: 24px;
     background: var(--surface-raised); border: 1px solid var(--line); border-radius: 10px;
-    padding: 10px 16px; font-size: 12.5px; z-index: 30; opacity: 0; pointer-events: none;
+    padding: 10px 14px; font-size: 12.5px; z-index: 30; opacity: 0; pointer-events: none;
     transition: opacity 0.2s ease, transform 0.2s ease;
+    display: flex; align-items: center; gap: 12px; max-width: 92vw;
   }
-  .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); pointer-events: auto; }
+  .toast button {
+    background: none; border: none; color: var(--amber); font-family: inherit;
+    font-size: 12.5px; font-weight: 500; cursor: pointer; padding: 2px 4px; flex: none;
+  }
 
   .update-bar {
     display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: 20px;
@@ -470,18 +476,6 @@
     <div class="micro-card fat"><span class="label">Fat</span><span class="val num" id="fatVal">0g</span></div>
   </div>
 
-  <div class="section-title" style="margin-top:0;">
-    <span>Weight &amp; trends</span>
-    <button onclick="toggleInsights()" id="insightsToggleBtn">Show</button>
-  </div>
-  <div class="detail-panel" id="insightsPanel"></div>
-
-  <div class="section-title" style="margin-top:0;">
-    <span>Nutrition detail</span>
-    <button onclick="toggleDetail()" id="detailToggleBtn">Show</button>
-  </div>
-  <div class="detail-panel" id="detailPanel"></div>
-
   <div class="goals-form" id="goalsForm">
     <div class="row">
       <div style="flex:1"><label for="goalCalInput">Calorie goal</label><input type="number" inputmode="numeric" id="goalCalInput" placeholder="2700"></div>
@@ -508,6 +502,8 @@
     Quick add
     <button onclick="toggleEdit()" id="editToggleBtn">Edit spots</button>
   </div>
+  <div class="new-product" id="seedWarning" style="display:none;"></div>
+
   <div class="lib-search" id="libSearchWrap" style="display:none;">
     <input id="libSearch" placeholder="Filter your foods…" oninput="renderPresets()">
   </div>
@@ -518,9 +514,23 @@
     <button onclick="copyPreviousDay()" id="copyDayBtn">Copy yesterday</button>
   </div>
   <div class="log-list" id="logList"></div>
+
+  <div class="tier-break"></div>
+
+  <div class="section-title">
+    <span>Weight &amp; trends</span>
+    <button onclick="toggleInsights()" id="insightsToggleBtn">Show</button>
+  </div>
+  <div class="detail-panel" id="insightsPanel"></div>
+
+  <div class="section-title">
+    <span>Nutrition detail</span>
+    <button onclick="toggleDetail()" id="detailToggleBtn">Show</button>
+  </div>
+  <div class="detail-panel" id="detailPanel"></div>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast"><span id="toastText"></span><button id="toastAction" style="display:none"></button></div>
 
 <div class="update-bar" id="updateBar">
   <span>A new version is ready.</span>
@@ -781,6 +791,17 @@
       <button class="btn btn-ghost" onclick="closeSettingsModal()">Close</button>
     </div>
 
+    <div class="settings-block">
+      <h3>Your data</h3>
+      <p>Everything you've logged, as files you keep. JSON is the complete record;
+         CSV opens in any spreadsheet, one row per logged item.</p>
+      <div class="row" style="display:flex;gap:8px;">
+        <button class="btn btn-ghost" style="flex:1" onclick="exportData('json')">Export JSON</button>
+        <button class="btn btn-ghost" style="flex:1" onclick="exportData('csv')">Export CSV</button>
+      </div>
+      <p id="exportStatus" style="margin-top:8px;"></p>
+    </div>
+
     <div class="settings-block" id="installBlock">
       <h3>Install</h3>
       <p id="installText">Checking…</p>
@@ -908,12 +929,30 @@ function watchCurrentDay() {
 /* ---------- toast ---------- */
 
 let toastTimer = null;
-function toast(msg) {
+
+// An optional action turns the toast into an undo affordance. Deleting is the
+// only thing in the app that can lose data, so it should always be reversible.
+function toast(msg, action) {
   const el = document.getElementById('toast');
-  el.textContent = msg;
+  const btn = document.getElementById('toastAction');
+  document.getElementById('toastText').textContent = msg;
+
+  if (action) {
+    btn.textContent = action.label;
+    btn.style.display = 'block';
+    btn.onclick = () => {
+      el.classList.remove('show');
+      clearTimeout(toastTimer);
+      action.fn();
+    };
+  } else {
+    btn.style.display = 'none';
+    btn.onclick = null;
+  }
+
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+  toastTimer = setTimeout(() => el.classList.remove('show'), action ? 6000 : 2200);
 }
 
 /* ---------- rendering ---------- */
@@ -999,6 +1038,7 @@ function render() {
 
   renderGlance(t);
   renderRecents();
+  renderSeedWarning();
   renderPresets();
   renderLog();
   renderDetail();
@@ -1379,7 +1419,18 @@ function toggleEdit() {
   document.getElementById('editToggleBtn').textContent = editMode ? 'Done' : 'Edit spots';
   render();
 }
-async function deletePreset(id) { await store.deleteFood(id); }
+async function deletePreset(id) {
+  const gone = foods.find((f) => f.id === id);
+  await store.deleteFood(id);
+  if (!gone) return;
+  toast(`Removed ${gone.name}`, {
+    label: 'Undo',
+    fn: async () => {
+      await store.addFood(gone);
+      toast('Restored');
+    },
+  });
+}
 function toggleGoalsForm() { document.getElementById('goalsForm').classList.toggle('open'); }
 async function saveGoals() {
   const next = {
@@ -1810,6 +1861,155 @@ async function saveEntryEdit() {
     meal: entryMeal,
   });
   toast('Entry updated');
+}
+
+/* ---------- exporting your data ---------- */
+
+function downloadBlob(text, filename, mime) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoking immediately can cancel the download on some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function toCSV(data) {
+  const cols = ['date', 'meal', 'time', 'name', 'qty', 'portion', 'cal', 'protein_g', 'carbs_g', 'fat_g']
+    .concat(NUTRIENT_IDS.map((id) => `${id}_${NUTRIENT_BY_ID[id].unit}`));
+
+  // Excel and Sheets both need quotes doubled and the field wrapped.
+  const esc = (v) => {
+    const str = v == null ? '' : String(v);
+    return /[",\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+  };
+
+  const rows = [cols.join(',')];
+  for (const date of Object.keys(data.days).sort()) {
+    for (const e of data.days[date]) {
+      const base = [
+        date, e.meal || '', e.time || '', e.name || '',
+        e.qty ?? '', e.portionLabel || '',
+        Math.round((Number(e.cal) || 0) * 10) / 10,
+        Math.round((Number(e.pro) || 0) * 10) / 10,
+        Math.round((Number(e.carb) || 0) * 10) / 10,
+        Math.round((Number(e.fat) || 0) * 10) / 10,
+      ];
+      const micros = NUTRIENT_IDS.map((id) => {
+        const v = Number(e.micros?.[id]);
+        return Number.isFinite(v) && v > 0 ? Math.round(v * 100) / 100 : '';
+      });
+      rows.push(base.concat(micros).map(esc).join(','));
+    }
+  }
+
+  // Weights ride along at the bottom rather than in a second file.
+  const wKeys = Object.keys(data.weights || {}).sort();
+  if (wKeys.length) {
+    rows.push('');
+    rows.push('date,weight_lb');
+    for (const k of wKeys) rows.push(`${k},${data.weights[k]}`);
+  }
+  return rows.join('\n');
+}
+
+async function exportData(format) {
+  const status = document.getElementById('exportStatus');
+  status.textContent = 'Gathering your history…';
+
+  try {
+    // Firestore cannot list subcollections, so history is found by probing a
+    // date range. Anything already cached offline costs nothing to re-read.
+    const candidates = lastNDayKeys(dateKey(new Date()), 400);
+    const data = await store.exportAll({
+      candidateKeys: candidates,
+      goals,
+      foods,
+      weights,
+      onProgress: (done, total) => {
+        if (done % 25 === 0) status.textContent = `Reading day ${done} of ${total}…`;
+      },
+    });
+
+    const dayCount = Object.keys(data.days).length;
+    const entryCount = Object.values(data.days).reduce((a, d) => a + d.length, 0);
+    const stamp = dateKey(new Date());
+
+    if (format === 'csv') {
+      downloadBlob(toCSV(data), `fuel-log-${stamp}.csv`, 'text/csv;charset=utf-8');
+    } else {
+      downloadBlob(JSON.stringify(data, null, 2), `fuel-log-${stamp}.json`, 'application/json');
+    }
+
+    status.textContent = `Exported ${entryCount} item${entryCount === 1 ? '' : 's'} across ${dayCount} day${dayCount === 1 ? '' : 's'}.`;
+  } catch (e) {
+    console.error(e);
+    status.textContent = 'Export failed: ' + (e.message || 'unknown error');
+  }
+}
+
+/* ---------- the seeded dining hall estimates ---------- */
+
+// These six were placeholder numbers invented when the app was first sketched,
+// not measured from anything. Leaving them silently in place means logging
+// against fiction, and it quietly corrupts the TDEE estimate too.
+const SEED_ESTIMATES = {
+  p1: 'Rand Dining — chicken bowl',
+  p2: 'Rand Dining — omelet + toast',
+  p3: 'Publix — rotisserie chicken + rice',
+  p4: 'Publix — protein shake',
+  p5: 'Commons — pasta station',
+  p6: 'Protein bar',
+};
+
+function unverifiedSeeds() {
+  return foods.filter((f) => SEED_ESTIMATES[f.id] && f.name === SEED_ESTIMATES[f.id]);
+}
+
+function renderSeedWarning() {
+  const box = document.getElementById('seedWarning');
+  if (!box) return;
+  const seeds = unverifiedSeeds();
+
+  if (!ready || seeds.length === 0 || localStorage.getItem('fuellog:seedsAcknowledged')) {
+    box.style.display = 'none';
+    return;
+  }
+
+  box.innerHTML = `
+    <b>${seeds.length} quick add${seeds.length === 1 ? ' is' : 's are'} guesswork</b>
+    <span>These came preloaded as rough placeholders — nobody measured them. Tap the
+      <b>⋯</b> on one, then <b>Numbers wrong? Edit them</b> to put in real figures from
+      the dining hall's nutrition board, or clear them out.</span>
+    <div class="row" style="display:flex;gap:8px;margin-top:8px;">
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="deleteSeeds()">Delete all ${seeds.length}</button>
+      <button class="btn btn-ghost btn-sm" style="flex:1" onclick="ackSeeds()">I'll fix them</button>
+    </div>`;
+  box.style.display = 'flex';
+}
+
+async function deleteSeeds() {
+  const seeds = unverifiedSeeds();
+  for (const f of seeds) await store.deleteFood(f.id);
+  localStorage.setItem('fuellog:seedsAcknowledged', '1');
+  renderSeedWarning();
+  toast(`Removed ${seeds.length} placeholder${seeds.length === 1 ? '' : 's'}`, {
+    label: 'Undo',
+    fn: async () => {
+      for (const f of seeds) await store.addFood(f);
+      localStorage.removeItem('fuellog:seedsAcknowledged');
+      renderSeedWarning();
+    },
+  });
+}
+
+function ackSeeds() {
+  localStorage.setItem('fuellog:seedsAcknowledged', '1');
+  renderSeedWarning();
 }
 
 /* ---------- today at a glance ---------- */
@@ -2288,9 +2488,24 @@ Object.assign(window, {
   toggleInsights, saveWeight, renderPresets,
   openEntryEdit, closeEntryEdit, saveEntryEdit, refreshEntryPreview, setEntryMeal,
   applyUpdate, doInstall, dismissInstall,
+  exportData, deleteSeeds, ackSeeds,
 });
 
-async function removeLogEntry(id) { await store.removeEntry(dateKey(viewDate), id); }
+async function removeLogEntry(id) {
+  const dayK = dateKey(viewDate);
+  const gone = log.find((e) => e.id === id);
+  await store.removeEntry(dayK, id);
+  if (!gone) return;
+  toast(`Removed ${gone.name}`, {
+    label: 'Undo',
+    fn: async () => {
+      // A fresh id is fine; everything else about the entry is restored.
+      const { id: _drop, ...rest } = gone;
+      await store.addEntry(dayK, rest);
+      toast('Restored');
+    },
+  });
+}
 window.removeLogEntry = removeLogEntry;
 
 boot();

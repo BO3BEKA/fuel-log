@@ -283,6 +283,13 @@ class LocalStore {
     return out;
   }
 
+  async listDayKeys() {
+    return Object.keys(localStorage)
+      .filter((k) => k.startsWith(PREFIX + "log:"))
+      .map((k) => k.slice((PREFIX + "log:").length))
+      .sort();
+  }
+
   async getCachedBarcode(upc) {
     return loadJSON(PREFIX + "barcode:" + upc, null);
   }
@@ -618,6 +625,25 @@ class CloudStore {
     return Object.fromEntries(results.filter(Boolean));
   }
 
+  // The Firestore web SDK cannot list subcollections, and the days/{date}
+  // documents are never written — only their entries subcollections exist. So
+  // there is nothing to enumerate, and the only way to find your history is to
+  // probe a date range. Reads already in the offline cache cost nothing, and
+  // this only ever runs when you tap Export.
+  async listDayKeys(candidateKeys) {
+    const found = await Promise.all(
+      (candidateKeys || []).map(async (k) => {
+        try {
+          const entries = await this.getDayEntries(k);
+          return entries.length ? k : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+    return found.filter(Boolean).sort();
+  }
+
   // The barcode cache is shared across all users of the app, so the second
   // scan of a given product anywhere is instant and works offline.
   async getCachedBarcode(upc) {
@@ -710,6 +736,46 @@ class CloudStore {
     return this._redirectError || null;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Export
+ * ------------------------------------------------------------------ */
+
+// Everything the app knows about you, in one object. Deliberately plain JSON
+// with no Firestore types in it, so it stays readable in ten years.
+//
+// goals, foods and weights are passed in rather than re-read, because the app
+// already holds them live and re-fetching would only risk disagreeing with what
+// is on screen.
+async function exportAll(store, { candidateKeys, goals, foods, weights, onProgress } = {}) {
+  const dayKeys = await store.listDayKeys(candidateKeys);
+
+  const days = {};
+  let done = 0;
+  for (const k of dayKeys) {
+    try {
+      const entries = await store.getDayEntries(k);
+      if (entries.length) days[k] = entries;
+    } catch {
+      /* skip a day we cannot read rather than failing the whole export */
+    }
+    done++;
+    if (onProgress) onProgress(done, dayKeys.length);
+  }
+
+  return {
+    app: "Fuel Log",
+    formatVersion: 1,
+    exportedAt: new Date().toISOString(),
+    goals: goals || null,
+    weights: weights || {},
+    foods: foods || [],
+    days,
+  };
+}
+
+LocalStore.prototype.exportAll = function (opts) { return exportAll(this, opts); };
+CloudStore.prototype.exportAll = function (opts) { return exportAll(this, opts); };
 
 /* ------------------------------------------------------------------ *
  * Backend selection
