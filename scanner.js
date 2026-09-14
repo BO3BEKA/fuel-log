@@ -1,23 +1,29 @@
 // scanner.js — camera barcode scanning.
 //
-// BUILD marker: bump this when changing the file. It's shown in the scanner's
-// diagnostics line so there is never any doubt about which version is live on
-// the site, which matters when GitHub Pages serves a stale cached copy.
-export const SCANNER_BUILD = 'scanner-v3';
+// Bump this when the file changes. It shows in the scanner's diagnostics line,
+// so there is never any doubt about which build is actually live.
+export const SCANNER_BUILD = 'scanner-v4';
 
-// Why this drives its own decode loop instead of using ZXing's
-// decodeFromConstraints helper:
+// WHAT WAS WRONG IN v3, because it is a trap worth recording:
 //
-//   1. Cropping. A 1D barcode is decoded by scanning horizontal lines across
-//      the image. Handing ZXing the whole 1920x1080 frame means the barcode
-//      occupies a small band and most scan lines hit packaging instead. We
-//      crop to the region inside the on-screen reticle, so what you aim at is
-//      exactly what gets decoded. This alone is a large accuracy win.
-//   2. Rotation. A barcode held vertically will not decode from horizontal
-//      scan lines. Every other pass runs against a 90-degree rotated copy.
-//   3. Visibility. The helper hides the loop, so a stalled decoder looks
-//      identical to "no barcode in view". Here every pass is counted and
-//      reported.
+//   1. It called reader.decodeFromCanvas(). That method does not exist on
+//      BrowserMultiFormatReader in this version of ZXing. The live loop
+//      therefore never decoded a single frame.
+//   2. The obvious replacement, handing canvas pixels to RGBLuminanceSource,
+//      also fails. Despite the name it does NOT accept RGBA — it wants one
+//      byte of luminance per pixel. Passing RGBA returns NotFoundException on
+//      every frame, which looks identical to "no barcode in view".
+//
+// The working path, verified against generated EAN-13 images including a
+// deliberately blurred one:
+//
+//   canvas -> getImageData -> convert to grayscale -> RGBLuminanceSource
+//          -> HybridBinarizer -> BinaryBitmap -> MultiFormatReader.decode
+//
+// A barcode is also decoded from a cropped region matching the on-screen
+// reticle, and from a 90-degree rotated copy on alternate frames, because a
+// 1D barcode read by horizontal scan lines cannot be decoded when it is held
+// vertically.
 
 const ZXING_URL = 'https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/+esm';
 const FORMATS_NATIVE = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'itf'];
@@ -31,19 +37,8 @@ const VIDEO_CONSTRAINTS = {
   },
 };
 
-// Matches the .scan-reticle box in the page, so the crop is what the user aims at.
+// Matches the .scan-reticle box in the page, so the crop is what you aim at.
 const CROP = { top: 0.22, bottom: 0.78, left: 0.10, right: 0.90 };
-
-let zxingPromise = null;
-function loadZXing() {
-  if (!zxingPromise) {
-    zxingPromise = import(/* @vite-ignore */ ZXING_URL).catch((e) => {
-      zxingPromise = null;
-      throw new Error('Could not load the scanner library (' + (e.message || 'network error') + ')');
-    });
-  }
-  return zxingPromise;
-}
 
 export function cameraSupported() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
@@ -52,114 +47,161 @@ export function secureEnough() {
   return window.isSecureContext || location.hostname === 'localhost' || location.protocol === 'https:';
 }
 
-async function nativeUsable() {
-  if (!('BarcodeDetector' in window)) return false;
-  try {
-    const avail = await window.BarcodeDetector.getSupportedFormats();
-    // Chrome on Windows reports the API but supports no 1D formats at all.
-    return FORMATS_NATIVE.some((f) => avail.includes(f));
-  } catch {
-    return false;
-  }
-}
-
-function zxingHints(lib) {
-  const { DecodeHintType, BarcodeFormat } = lib;
-  const hints = new Map();
-  hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-    BarcodeFormat.EAN_13, BarcodeFormat.EAN_8,
-    BarcodeFormat.UPC_A, BarcodeFormat.UPC_E,
-    BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.ITF,
-  ]);
-  hints.set(DecodeHintType.TRY_HARDER, true);
-  return hints;
-}
-
 const cleanCode = (v) => String(v == null ? '' : v).replace(/\D/g, '');
-const plausible = (code) => code.length === 8 || code.length === 12 || code.length === 13 || code.length === 14;
+const plausible = (c) => c.length === 8 || c.length === 12 || c.length === 13 || c.length === 14;
 
 /* ------------------------------------------------------------------ *
- * Success feedback
+ * ZXing decoder
  * ------------------------------------------------------------------ */
 
-// iOS Safari does not implement navigator.vibrate at all — it is Android only,
-// and there is no web API that triggers the iPhone's Taptic Engine. So a short
-// beep goes alongside it, which does work everywhere once the page has had a
-// user gesture (opening the scanner counts).
-export function successFeedback() {
-  try {
-    if (navigator.vibrate) navigator.vibrate([45, 35, 45]);
-  } catch { /* some browsers throw when the page is backgrounded */ }
+let zxingPromise = null;
+function loadZXing() {
+  if (!zxingPromise) {
+    zxingPromise = import(/* @vite-ignore */ ZXING_URL).catch((e) => {
+      zxingPromise = null;
+      throw new Error('Could not load the scanner library (' + (e.message || 'network') + ')');
+    });
+  }
+  return zxingPromise;
+}
 
+let decoderPromise = null;
+
+// Builds a decoder from ZXing's core classes rather than its browser wrappers,
+// because the core API is stable across versions and the wrappers are not.
+function getDecoder() {
+  if (decoderPromise) return decoderPromise;
+
+  decoderPromise = loadZXing().then((z) => {
+    const missing = ['MultiFormatReader', 'BinaryBitmap', 'HybridBinarizer', 'RGBLuminanceSource',
+                     'DecodeHintType', 'BarcodeFormat'].filter((n) => !z[n]);
+    if (missing.length) throw new Error('Scanner library is missing: ' + missing.join(', '));
+
+    const hints = new Map();
+    hints.set(z.DecodeHintType.POSSIBLE_FORMATS, [
+      z.BarcodeFormat.EAN_13, z.BarcodeFormat.EAN_8,
+      z.BarcodeFormat.UPC_A, z.BarcodeFormat.UPC_E,
+      z.BarcodeFormat.CODE_128, z.BarcodeFormat.CODE_39, z.BarcodeFormat.ITF,
+    ]);
+    hints.set(z.DecodeHintType.TRY_HARDER, true);
+
+    const reader = new z.MultiFormatReader();
+    reader.setHints(hints);
+
+    return {
+      name: 'ZXing core',
+      // imageData is a standard canvas ImageData.
+      decode(imageData) {
+        const { data, width, height } = imageData;
+        // One luminance byte per pixel. This conversion is the whole fix.
+        const gray = new Uint8ClampedArray(width * height);
+        for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+          gray[j] = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
+        }
+        const src = new z.RGBLuminanceSource(gray, width, height);
+        const bitmap = new z.BinaryBitmap(new z.HybridBinarizer(src));
+        try {
+          return cleanCode(reader.decode(bitmap).getText());
+        } catch {
+          return ''; // NotFoundException on a frame with no barcode is normal
+        } finally {
+          reader.reset();
+        }
+      },
+    };
+  }).catch((e) => {
+    decoderPromise = null;
+    throw e;
+  });
+
+  return decoderPromise;
+}
+
+async function nativeDetector() {
+  if (!('BarcodeDetector' in window)) return null;
   try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(880, ctx.currentTime);
-    osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.07);
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.16);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.18);
-    setTimeout(() => { try { ctx.close(); } catch { /* already closed */ } }, 400);
-  } catch { /* audio is a nicety, never a failure */ }
+    const avail = await window.BarcodeDetector.getSupportedFormats();
+    // Chrome on Windows advertises the API but supports no 1D formats.
+    const usable = FORMATS_NATIVE.filter((f) => avail.includes(f));
+    if (!usable.length) return null;
+    return new window.BarcodeDetector({ formats: usable });
+  } catch {
+    return null;
+  }
 }
 
 /* ------------------------------------------------------------------ *
  * Frame capture
  * ------------------------------------------------------------------ */
 
-function cropToCanvas(video, canvas, rotate) {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (!vw || !vh) return false;
-
-  const sx = Math.floor(vw * CROP.left);
-  const sy = Math.floor(vh * CROP.top);
-  const sw = Math.floor(vw * (CROP.right - CROP.left));
-  const sh = Math.floor(vh * (CROP.bottom - CROP.top));
-  if (sw < 20 || sh < 20) return false;
+function drawRegion(source, canvas, sw, sh, rotate, scale = 1) {
+  const sx = Math.floor(sw * CROP.left);
+  const sy = Math.floor(sh * CROP.top);
+  const cw = Math.floor(sw * (CROP.right - CROP.left));
+  const ch = Math.floor(sh * (CROP.bottom - CROP.top));
+  if (cw < 24 || ch < 24) return null;
 
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const dw = Math.round(cw * scale);
+  const dh = Math.round(ch * scale);
+
   if (rotate) {
-    canvas.width = sh;
-    canvas.height = sw;
+    canvas.width = dh;
+    canvas.height = dw;
     ctx.save();
     ctx.translate(canvas.width / 2, canvas.height / 2);
     ctx.rotate(Math.PI / 2);
-    ctx.drawImage(video, sx, sy, sw, sh, -sw / 2, -sh / 2, sw, sh);
+    ctx.drawImage(source, sx, sy, cw, ch, -dw / 2, -dh / 2, dw, dh);
     ctx.restore();
   } else {
-    canvas.width = sw;
-    canvas.height = sh;
-    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+    canvas.width = dw;
+    canvas.height = dh;
+    ctx.drawImage(source, sx, sy, cw, ch, 0, 0, dw, dh);
   }
-  return true;
+  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+function drawWhole(source, canvas, sw, sh, maxSide = 1600) {
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const w = Math.round(sw * scale);
+  const h = Math.round(sh * scale);
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, w, h);
+  return ctx.getImageData(0, 0, w, h);
 }
 
 /* ------------------------------------------------------------------ *
- * Still photo decoding
+ * Still images
  * ------------------------------------------------------------------ */
 
+// A photo from the native camera is far sharper than any video frame the
+// browser hands over, so this reads barcodes live scanning gives up on.
 export async function decodeImageFile(file) {
-  const lib = await loadZXing();
-  const { BrowserMultiFormatReader } = lib;
-  const reader = new BrowserMultiFormatReader(zxingHints(lib));
-  const url = URL.createObjectURL(file);
+  const decoder = await getDecoder();
+  const bitmap = await createImageBitmap(file);
+  const canvas = document.createElement('canvas');
+
   try {
-    const result = await reader.decodeFromImageUrl(url);
-    const code = cleanCode(result?.getText?.());
-    return code.length >= 8 ? code : null;
-  } catch {
-    return null; // ZXing throws NotFoundException when there is no barcode
+    // Whole image first, then the middle, then rotated, then zoomed. A photo
+    // is worth spending several attempts on; a video frame is not.
+    const attempts = [
+      () => drawWhole(bitmap, canvas, bitmap.width, bitmap.height, 1600),
+      () => drawWhole(bitmap, canvas, bitmap.width, bitmap.height, 2400),
+      () => drawRegion(bitmap, canvas, bitmap.width, bitmap.height, false, 1),
+      () => drawRegion(bitmap, canvas, bitmap.width, bitmap.height, true, 1),
+      () => drawRegion(bitmap, canvas, bitmap.width, bitmap.height, false, 2),
+    ];
+    for (const make of attempts) {
+      const img = make();
+      if (!img) continue;
+      const code = decoder.decode(img);
+      if (plausible(code)) return code;
+    }
+    return null;
   } finally {
-    URL.revokeObjectURL(url);
-    try { reader.reset(); } catch { /* nothing to do */ }
+    bitmap.close?.();
   }
 }
 
@@ -188,35 +230,29 @@ export async function startScanner({ video, canvas, onResult, onStatus, onDiag }
   video.setAttribute('muted', 'true');
   video.muted = true;
 
-  const useNative = await nativeUsable();
-  diag.engine = useNative ? 'native BarcodeDetector' : 'ZXing';
-  push();
-  onStatus?.(useNative ? 'Starting camera…' : 'Loading scanner…');
+  onStatus?.('Loading scanner…');
 
-  let lib = null;
-  let reader = null;
-  let detector = null;
-
-  if (useNative) {
-    detector = new window.BarcodeDetector({ formats: FORMATS_NATIVE });
-  } else {
-    lib = await loadZXing();
-    reader = new lib.BrowserMultiFormatReader(zxingHints(lib));
-    if (typeof reader.decodeFromCanvas !== 'function') {
-      diag.lastError = 'decodeFromCanvas unavailable';
+  const detector = await nativeDetector();
+  let decoder = null;
+  if (!detector) {
+    try {
+      decoder = await getDecoder();
+    } catch (e) {
+      diag.lastError = e.message;
       push();
-      throw new Error('The scanner library loaded but is missing the decoder this needs.');
+      throw e;
     }
   }
+  diag.engine = detector ? 'native BarcodeDetector' : decoder.name;
+  push();
 
+  onStatus?.('Starting camera…');
   const stream = await navigator.mediaDevices.getUserMedia(VIDEO_CONSTRAINTS);
   video.srcObject = stream;
   await video.play().catch(() => {});
 
   // Safari reports 0x0 for a moment after play() resolves.
-  for (let i = 0; i < 40 && !video.videoWidth; i++) {
-    await new Promise((r) => setTimeout(r, 50));
-  }
+  for (let i = 0; i < 40 && !video.videoWidth; i++) await new Promise((r) => setTimeout(r, 50));
   diag.resolution = video.videoWidth ? `${video.videoWidth}x${video.videoHeight}` : 'no frames';
   push();
 
@@ -230,7 +266,6 @@ export async function startScanner({ video, canvas, onResult, onStatus, onDiag }
   const handle = makeHandle(stream, diag.engine, () => {
     stopped = true;
     if (timer) clearTimeout(timer);
-    try { reader?.reset(); } catch { /* nothing to do */ }
     video.srcObject = null;
   });
 
@@ -244,25 +279,21 @@ export async function startScanner({ video, canvas, onResult, onStatus, onDiag }
     if (stopped) return;
 
     if (video.readyState >= 2 && video.videoWidth > 0) {
-      if (!diag.resolution.includes('x')) {
-        diag.resolution = `${video.videoWidth}x${video.videoHeight}`;
-      }
+      if (!diag.resolution.includes('x')) diag.resolution = `${video.videoWidth}x${video.videoHeight}`;
+
       try {
         if (detector) {
-          // The native detector handles rotation and framing itself, so give
-          // it the whole frame.
           const codes = await detector.detect(video);
           const code = cleanCode(codes?.[0]?.rawValue);
           if (plausible(code)) return finish(code);
-        } else if (cropToCanvas(video, canvas, rotatePass)) {
-          try {
-            const result = reader.decodeFromCanvas(canvas);
-            const code = cleanCode(result?.getText?.());
+        } else {
+          const img = drawRegion(video, canvas, video.videoWidth, video.videoHeight, rotatePass, 1);
+          if (img) {
+            const code = decoder.decode(img);
             if (plausible(code)) return finish(code);
-          } catch {
-            // NotFoundException on a frame with no barcode. Expected, constant,
-            // and not an error worth recording.
           }
+          // Alternating catches barcodes held vertically, which otherwise
+          // never decode at all.
           rotatePass = !rotatePass;
         }
         diag.passes++;
@@ -281,8 +312,36 @@ export async function startScanner({ video, canvas, onResult, onStatus, onDiag }
   return handle;
 }
 
-// Continuous autofocus matters a lot for barcodes and is a no-op where the
-// browser does not support it, which includes all of Safari.
+/* ------------------------------------------------------------------ *
+ * Feedback and camera control
+ * ------------------------------------------------------------------ */
+
+// iOS Safari does not implement navigator.vibrate and no web API reaches the
+// Taptic Engine, so the beep is what iPhone users actually get.
+export function successFeedback() {
+  try {
+    if (navigator.vibrate) navigator.vibrate([45, 35, 45]);
+  } catch { /* throws when backgrounded on some browsers */ }
+
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.07);
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.16);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.18);
+    setTimeout(() => { try { ctx.close(); } catch { /* already closed */ } }, 400);
+  } catch { /* audio is a nicety, never a failure */ }
+}
+
 async function nudgeFocus(track) {
   if (!track?.applyConstraints) return;
   const caps = track.getCapabilities?.() || {};
