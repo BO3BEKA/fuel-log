@@ -6,6 +6,13 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#101314">
+<link rel="manifest" href="manifest.webmanifest">
+<!-- iOS ignores the manifest for Add to Home Screen and uses this instead. -->
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+<meta name="apple-mobile-web-app-title" content="Fuel Log">
+<meta name="mobile-web-app-capable" content="yes">
 <title>Fuel Log</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -294,6 +301,34 @@
   .lib-search input { width: 100%; background: var(--surface); border: 1px solid var(--line);
     border-radius: 10px; color: var(--text); font-family: inherit; font-size: 13px; padding: 9px 11px; }
   .log-item .left { cursor: pointer; flex: 1; }
+
+  .update-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    background: var(--amber); color: #1a1305;
+    display: none; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 16px; font-size: 13px; font-weight: 500;
+  }
+  .update-bar.show { display: flex; }
+  .update-bar button {
+    background: #1a1305; color: var(--amber); border: none; border-radius: 7px;
+    padding: 7px 14px; font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  }
+
+  .install-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 13px 14px; margin-bottom: 16px; display: none;
+  }
+  .install-card.show { display: block; }
+  .install-card h3 { font-family: 'Space Grotesk', sans-serif; font-size: 13.5px; margin: 0 0 5px; font-weight: 500; }
+  .install-card p { font-size: 11.5px; color: var(--text-muted); line-height: 1.55; margin: 0 0 10px; }
+  .install-card .row { display: flex; gap: 8px; }
+  .install-card ol { margin: 0 0 10px; padding-left: 18px; font-size: 11.5px; color: var(--text-muted); line-height: 1.7; }
+  .install-card kbd {
+    background: var(--surface-raised); border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 5px; font-family: inherit; font-size: 11px; color: var(--text);
+  }
+  .offline-pill { display: none; }
+  .offline-pill.show { display: inline; }
   .scan-diag .bad { color: var(--danger); }
   .scan-diag .good { color: var(--sage); }
   .scan-wrap.hit .scan-reticle { border-color: var(--sage); background: rgba(91,156,122,0.18); }
@@ -358,6 +393,22 @@
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(-4px); }
 
+  .update-bar {
+    display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: 20px;
+    background: var(--amber); color: #1a1305; border-radius: 10px; padding: 10px 12px 10px 16px;
+    font-size: 12.5px; z-index: 40; align-items: center; gap: 12px; font-weight: 500;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+  }
+  .update-bar.show { display: flex; }
+  .update-bar button {
+    background: #1a1305; color: var(--amber); border: none; border-radius: 7px;
+    padding: 6px 12px; font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+  }
+  /* Keeps content clear of the iPhone home indicator in standalone mode. */
+  @media (display-mode: standalone) {
+    #app { padding-bottom: calc(60px + env(safe-area-inset-bottom)); padding-top: env(safe-area-inset-top); }
+  }
+
   :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
@@ -371,6 +422,11 @@
       <button class="gear" onclick="openSettingsModal()" title="Settings">&#9881;</button>
     </div>
   </header>
+
+  <div class="install-card" id="installCard">
+    <h3 id="installTitle">Put Fuel Log on your home screen</h3>
+    <div id="installBody"></div>
+  </div>
 
   <div class="day-nav">
     <button class="arrow" onclick="shiftDay(-1)" aria-label="Previous day">&#8249;</button>
@@ -454,6 +510,15 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div class="update-bar" id="updateBar">
+  <span>A new version is ready.</span>
+  <button onclick="applyUpdate()">Reload</button>
+</div>
+<div class="update-bar" id="updateBar">
+  <span>A new version is ready.</span>
+  <button onclick="applyUpdate()">Reload</button>
+</div>
 
 <!-- ===================== Log a food ===================== -->
 <div class="modal-backdrop" id="modalBackdrop" onclick="if(event.target===this) closeLogModal()">
@@ -696,6 +761,12 @@
       <button class="btn btn-ghost" onclick="closeSettingsModal()">Close</button>
     </div>
 
+    <div class="settings-block" id="installBlock">
+      <h3>Install</h3>
+      <p id="installText">Checking…</p>
+      <button class="btn btn-ghost btn-block" id="installBtn" onclick="doInstall()" style="display:none;">Install Fuel Log</button>
+    </div>
+
     <div class="settings-block" id="accountBlock">
       <h3>Account</h3>
       <p id="accountText">Checking…</p>
@@ -777,6 +848,8 @@ function nowTime() { return new Date().toLocaleTimeString('en-US', { hour: 'nume
 /* ---------- boot ---------- */
 
 async function boot() {
+  registerServiceWorker();
+  renderInstallCard();
   buildMealPickers();
   buildMicroFields('m');
   buildMicroFields('e');
@@ -793,6 +866,8 @@ async function boot() {
   ready = true;
   render();
   renderAccountBlock();
+  renderInstallBlock();
+  handleLaunchAction();
 }
 
 function watchCurrentDay() {
@@ -1299,6 +1374,7 @@ async function saveGoals() {
 function openSettingsModal() {
   document.getElementById('usdaKeyInput').value = localStorage.getItem(USDA_KEY_STORAGE) || '';
   renderAccountBlock();
+  renderInstallBlock();
   document.getElementById('settingsBackdrop').classList.add('open');
 }
 function closeSettingsModal() { document.getElementById('settingsBackdrop').classList.remove('open'); }
@@ -1336,6 +1412,173 @@ async function connectGoogle() {
     btn.disabled = false;
     btn.textContent = 'Keep my data — sign in with Google';
   }
+}
+
+/* ---------- installing and updating ---------- */
+
+let deferredInstall = null;
+let swRegistration = null;
+
+const isStandalone = () =>
+  window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+const isIOS = () =>
+  /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+  // iPadOS 13+ reports itself as a Mac, so the touch check is what catches it.
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    swRegistration = reg;
+
+    // Already waiting from a previous visit.
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdateBar();
+
+    reg.addEventListener('updatefound', () => {
+      const incoming = reg.installing;
+      if (!incoming) return;
+      incoming.addEventListener('statechange', () => {
+        // A controller already existing means this is an update rather than
+        // the very first install, so it is worth telling the user about.
+        if (incoming.state === 'installed' && navigator.serviceWorker.controller) {
+          showUpdateBar();
+        }
+      });
+    });
+  }).catch((e) => console.warn('service worker registration failed', e));
+
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  });
+
+  // Catch a version published while the app sat open on your phone.
+  setInterval(() => { swRegistration?.update().catch(() => {}); }, 60 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) swRegistration?.update().catch(() => {});
+  });
+}
+
+function showUpdateBar() {
+  document.getElementById('updateBar').classList.add('show');
+}
+
+function applyUpdate() {
+  const waiting = swRegistration?.waiting;
+  if (waiting) waiting.postMessage('SKIP_WAITING'); // controllerchange reloads us
+  else window.location.reload();
+}
+
+// The settings panel says the same thing in a quieter place, and stays useful
+// after the home-screen card has been dismissed.
+function renderInstallBlock() {
+  const text = document.getElementById('installText');
+  const btn = document.getElementById('installBtn');
+  if (!text) return;
+
+  if (isStandalone()) {
+    text.textContent = 'Installed. You are running the standalone app.';
+    btn.style.display = 'none';
+    return;
+  }
+  if (deferredInstall) {
+    text.textContent = 'Runs full screen, launches instantly, and works with no signal.';
+    btn.style.display = 'block';
+    return;
+  }
+  if (isIOS()) {
+    text.textContent = 'In Safari, tap Share then “Add to Home Screen”. Chrome on iOS cannot install it — it has to be Safari.';
+    btn.style.display = 'none';
+    return;
+  }
+  text.textContent = 'Your browser can usually install this from its own menu — look for “Install” or “Add to Home screen”.';
+  btn.style.display = 'none';
+}
+
+function renderInstallCard() {
+  const card = document.getElementById('installCard');
+  const body = document.getElementById('installBody');
+
+  // Already installed, or dismissed before — say nothing.
+  if (isStandalone() || localStorage.getItem('fuellog:installDismissed')) {
+    card.classList.remove('show');
+    return;
+  }
+
+  if (deferredInstall) {
+    body.innerHTML = `
+      <p>Runs full screen with no browser bars, launches instantly, and works with no signal.</p>
+      <div class="row">
+        <button class="btn btn-primary" style="flex:1" onclick="doInstall()">Install</button>
+        <button class="btn btn-ghost" onclick="dismissInstall()">Not now</button>
+      </div>`;
+    card.classList.add('show');
+    return;
+  }
+
+  if (isIOS()) {
+    // iOS has no install prompt API — Add to Home Screen is manual, and only
+    // from Safari itself. Chrome on iOS cannot do it.
+    body.innerHTML = `
+      <p>iPhone and iPad can't do this automatically, but it takes two taps in Safari.
+        Afterwards it runs full screen and the camera behaves better for scanning.</p>
+      <ol>
+        <li>Tap the <kbd>Share</kbd> button at the bottom of Safari</li>
+        <li>Scroll down and tap <kbd>Add to Home Screen</kbd></li>
+      </ol>
+      <div class="row">
+        <button class="btn btn-ghost" style="flex:1" onclick="dismissInstall()">Got it</button>
+      </div>`;
+    card.classList.add('show');
+    return;
+  }
+
+  card.classList.remove('show');
+}
+
+async function doInstall() {
+  if (!deferredInstall) return;
+  closeSettingsModal();
+  deferredInstall.prompt();
+  try {
+    const { outcome } = await deferredInstall.userChoice;
+    if (outcome === 'accepted') toast('Installing…');
+  } catch { /* the prompt can only be used once */ }
+  deferredInstall = null;
+  document.getElementById('installCard').classList.remove('show');
+  renderInstallBlock();
+}
+
+function dismissInstall() {
+  localStorage.setItem('fuellog:installDismissed', '1');
+  document.getElementById('installCard').classList.remove('show');
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();          // suppress Chrome's own mini-infobar
+  deferredInstall = e;
+  renderInstallCard();
+  renderInstallBlock();
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredInstall = null;
+  document.getElementById('installCard').classList.remove('show');
+  renderInstallBlock();
+  toast('Fuel Log installed');
+});
+
+// Home-screen shortcuts land here with ?action=…
+function handleLaunchAction() {
+  const action = new URLSearchParams(location.search).get('action');
+  if (!action) return;
+  history.replaceState(null, '', location.pathname);
+  if (action === 'scan') { openLogModal(); openScanner(); }
+  else if (action === 'quickadd') openQuickAdd();
 }
 
 /* ---------- weight, trends and TDEE ---------- */
@@ -1970,6 +2213,7 @@ Object.assign(window, {
   toggleMicroFields, toggleDetail,
   toggleInsights, saveWeight, renderPresets,
   openEntryEdit, closeEntryEdit, saveEntryEdit, refreshEntryPreview, setEntryMeal,
+  applyUpdate, doInstall, dismissInstall,
 });
 
 async function removeLogEntry(id) { await store.removeEntry(dateKey(viewDate), id); }

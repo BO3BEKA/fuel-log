@@ -1,0 +1,31 @@
+{
+  "name": "Fuel Log",
+  "short_name": "Fuel Log",
+  "description": "A food and macro log built for how you actually eat.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#101314",
+  "theme_color": "#101314",
+  "categories": ["health", "fitness", "lifestyle"],
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Scan a barcode",
+      "short_name": "Scan",
+      "url": "./?action=scan",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Quick add",
+      "short_name": "Quick add",
+      "url": "./?action=quickadd",
+      "icons": [{ "src": "icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
