@@ -414,6 +414,48 @@ function splitMacros(map) {
   return { macros: hasAny(macros) ? macros : null, micros };
 }
 
+// Turns a food you typed in yourself into a cache entry, so scanning that
+// barcode again finds it instantly — on any of your devices, and for anyone
+// else who scans the same product.
+export function foodToCacheEntry(food) {
+  const micros = normalizeMicros(food.micros);
+  const macros = {
+    cal: num(food.cal), pro: num(food.pro), carb: num(food.carb), fat: num(food.fat),
+  };
+  const byWeight = food.refUnit === 'g' || food.refUnit === 'ml';
+
+  // The cache is defined per 100 units, so rescale from whatever reference the
+  // food uses. A per-serving food has no weight basis, so it goes in the
+  // perServing slot instead.
+  let per100g = null;
+  let perServing = null;
+  let servingSize = 0;
+  let servingUnit = '';
+
+  if (byWeight) {
+    const f = 100 / (Number(food.refAmount) || 100);
+    per100g = { ...scaleObj({ ...macros, ...micros }, f) };
+    const s = (food.servings || [])[0];
+    if (s && s.amount > 0) {
+      servingSize = s.amount;
+      servingUnit = s.label;
+    }
+  } else {
+    perServing = { ...macros, ...micros };
+  }
+
+  return {
+    name: String(food.name || '').slice(0, 200),
+    brand: '',
+    per100g,
+    perServing,
+    servingSize,
+    servingUnit,
+    source: 'Typed from the label',
+    updatedAt: Date.now(),
+  };
+}
+
 export function cacheToCandidate(d, barcode) {
   if (!d) return null;
   const a = splitMacros(d.per100g);

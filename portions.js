@@ -84,6 +84,8 @@ export function normalizeFood(raw) {
   if (!f.defaultUnitId) f.defaultUnitId = f.refUnit;
 
   f.logCount = Number(f.logCount) || 0;
+  // A barcode bound to this food makes future scans instant and offline.
+  f.barcode = typeof f.barcode === 'string' && /^[0-9]{8,14}$/.test(f.barcode) ? f.barcode : null;
   return f;
 }
 

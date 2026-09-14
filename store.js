@@ -94,6 +94,7 @@ function foodPayload(f) {
     servings: n.servings.slice(0, 8),
     defaultQty: n.defaultQty,
     defaultUnitId: n.defaultUnitId,
+    barcode: n.barcode,
     logCount: Number(f.logCount) || 0,
     lastUsed: Number(f.lastUsed) || Date.now(),
   };
@@ -109,6 +110,7 @@ function recentPayload(f) {
     refAmount: n.refAmount, refUnit: n.refUnit,
     servings: n.servings.slice(0, 4),
     defaultQty: n.defaultQty, defaultUnitId: n.defaultUnitId,
+    barcode: n.barcode,
     at: Date.now(),
   };
 }

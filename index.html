@@ -254,6 +254,22 @@
   }
   .scan-tools { display: flex; gap: 8px; margin-bottom: 12px; }
   .scan-hint { font-size: 11px; color: var(--text-muted); line-height: 1.5; margin-bottom: 10px; }
+  .scan-diag {
+    font-family: 'Space Grotesk', monospace; font-size: 10.5px; color: var(--text-muted);
+    background: var(--surface-raised); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; margin-bottom: 10px; line-height: 1.7; word-break: break-word;
+  }
+  .scan-diag b { color: var(--text); font-weight: 500; }
+  .new-product {
+    background: rgba(232,150,60,0.08); border: 1px solid rgba(232,150,60,0.35);
+    border-radius: 10px; padding: 11px 12px; margin-bottom: 12px;
+    font-size: 11.5px; line-height: 1.55; color: var(--text-muted);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .new-product b { color: var(--amber); font-weight: 500; }
+  .scan-diag .bad { color: var(--danger); }
+  .scan-diag .good { color: var(--sage); }
+  .scan-wrap.hit .scan-reticle { border-color: var(--sage); background: rgba(91,156,122,0.18); }
 
   .micro-toggle {
     width: 100%; background: var(--surface-raised); border: 1px solid var(--line);
@@ -411,6 +427,12 @@
 
     <!-- Step 1: pick or define the food -->
     <div class="step active" id="stepPick">
+      <div class="new-product" id="newProductBanner" style="display:none;">
+        <b>New product · <span id="npCode"></span></b>
+        <span>Not in any database yet. Type what's on the label once and this barcode is
+        bound to it — every future scan fills itself in instantly, on all your devices.</span>
+      </div>
+
       <button class="btn btn-ghost scan-btn" onclick="openScanner()">📷 Scan a barcode</button>
 
       <div class="search-row">
@@ -541,6 +563,8 @@
       <video id="scanVideo" playsinline autoplay muted></video>
       <div class="scan-reticle"></div>
     </div>
+    <canvas id="scanCanvas" style="display:none"></canvas>
+    <div class="scan-diag" id="scanDiag">Waiting for camera…</div>
 
     <div class="scan-hint" id="scanHint">
       Fill the orange box with the barcode, bars running left to right. Hold about
@@ -555,6 +579,8 @@
       </label>
       <button class="btn btn-ghost" style="flex:1;display:none;" id="torchBtn" onclick="toggleTorch()">Light</button>
     </div>
+
+    <button class="link-btn" style="margin-bottom:8px;" onclick="copyDiag()">Copy diagnostics</button>
 
     <div class="divider-text">or type the digits</div>
     <div class="search-row">
@@ -621,9 +647,9 @@ import {
 } from './portions.js';
 import {
   searchFoods, lookupBarcode, candidateToFood, candidateSummary,
-  candidateToCache, cacheToCandidate,
+  candidateToCache, cacheToCandidate, foodToCacheEntry,
 } from './foodsearch.js';
-import { startScanner, cameraSupported, secureEnough, decodeImageFile } from './scanner.js';
+import { startScanner, cameraSupported, secureEnough, decodeImageFile, successFeedback, SCANNER_BUILD } from './scanner.js';
 import {
   NUTRIENT_IDS, NUTRIENT_GROUPS, NUTRIENT_BY_ID,
   normalizeMicros, hasAnyMicros, formatAmount, pctDV,
@@ -643,6 +669,7 @@ let unwatchDay = null;
 let candidates = {};
 let scanHandle = null;
 let servDraft = [];
+let pendingBarcode = null;
 
 // The food being logged right now, plus the chosen portion and meal.
 let draft = null;          // normalized food
@@ -995,6 +1022,8 @@ function openLogModal(mealId) {
   document.getElementById('searchResults').innerHTML = '';
   document.getElementById('usdaQuery').value = '';
   document.getElementById('logModalTitle').textContent = 'Log a food';
+  document.getElementById('newProductBanner').style.display = 'none';
+  pendingBarcode = null;
   clearMicroFields('m');
   document.getElementById('mName').focus();
 }
@@ -1009,6 +1038,8 @@ function closeLogModal() {
   document.getElementById('searchResults').innerHTML = '';
   draft = null;
   draftFoodId = null;
+  pendingBarcode = null;
+  document.getElementById('newProductBanner').style.display = 'none';
 }
 
 function showStep(id) {
@@ -1079,6 +1110,7 @@ function continueFromManual() {
   setDraft({
     name, cal, pro, carb, fat, refAmount, refUnit,
     micros: readMicroFields('m'),
+    barcode: pendingBarcode,
     defaultQty: refAmount, defaultUnitId: refUnit,
   }, null);
 }
@@ -1113,7 +1145,14 @@ async function submitPortion() {
     await store.addFood({ ...food, defaultQty: qty, defaultUnitId: optId });
   }
   store.noteRecent({ ...food, defaultQty: qty, defaultUnitId: optId });
-  toast(`${food.name} · ${round(m.cal)} cal`);
+
+  // Teaching the cache is what stops you ever typing this product again.
+  if (food.barcode) {
+    store.cacheBarcode(food.barcode, foodToCacheEntry(food));
+    toast(`${food.name} saved · barcode remembered`);
+  } else {
+    toast(`${food.name} · ${round(m.cal)} cal`);
+  }
 }
 
 /* ---------- quick add ---------- */
@@ -1370,17 +1409,32 @@ function useCandidate(i) {
 
 /* ---------- barcode scanning ---------- */
 
+function renderDiag(d) {
+  const el = document.getElementById('scanDiag');
+  if (!d) { el.textContent = 'Waiting for camera…'; return; }
+  const yes = (v) => v ? '<span class="good">yes</span>' : '<span class="bad">NO</span>';
+  el.innerHTML =
+    `<b>${escapeHtml(d.build)}</b> · https ${yes(d.secure)} · camera ${yes(d.hasCamera)}<br>` +
+    `engine <b>${escapeHtml(d.engine)}</b> · video <b>${escapeHtml(d.resolution)}</b><br>` +
+    `frames checked <b>${d.passes}</b>` +
+    (d.lastError ? ` · <span class="bad">${escapeHtml(d.lastError)}</span>` : '');
+}
+
 function openScanner() {
   document.getElementById('scanBackdrop').classList.add('open');
   document.getElementById('manualBarcode').value = '';
   document.getElementById('photoInput').value = '';
+  document.getElementById('scanWrap').classList.remove('hit');
   const wrap = document.getElementById('scanWrap');
   const status = document.getElementById('scanStatus');
   document.getElementById('scanHint').style.display = 'block';
+  renderDiag(null);
 
   if (!secureEnough() || !cameraSupported()) {
     wrap.style.display = 'none';
     document.getElementById('torchBtn').style.display = 'none';
+    renderDiag({ build: SCANNER_BUILD, secure: secureEnough(), hasCamera: cameraSupported(),
+                 engine: 'none', resolution: '—', passes: 0, lastError: 'cannot start' });
     status.textContent = !secureEnough()
       ? 'The camera needs an https:// address. Use the photo button or type the digits.'
       : 'This browser will not give a web page camera access. Use the photo button or type the digits.';
@@ -1389,24 +1443,31 @@ function openScanner() {
 
   wrap.style.display = 'block';
   status.textContent = 'Starting camera…';
+  let lastPasses = 0;
 
   startScanner({
     video: document.getElementById('scanVideo'),
-    onStatus: (s) => { status.textContent = s; },
-    // Proves the decode loop is actually running, and after a while says so.
-    onProgress: (frames) => {
-      if (frames >= 80) {
-        status.textContent = 'Still looking… try the photo button, it focuses better.';
-      } else if (frames >= 24) {
-        status.textContent = 'Scanning… move a little closer or further away.';
+    canvas: document.getElementById('scanCanvas'),
+    onStatus: (t) => { status.textContent = t; },
+    onDiag: (d) => {
+      renderDiag(d);
+      lastPasses = d.passes;
+      // The frame counter is the honest signal that the loop is alive.
+      if (d.passes >= 90) {
+        status.textContent = 'Still looking. The photo button focuses much better — try that.';
+      } else if (d.passes >= 30) {
+        status.textContent = 'Scanning… try moving closer, then further away.';
       }
     },
-    onResult: (code) => { handleBarcode(code); },
+    onResult: (code) => {
+      document.getElementById('scanWrap').classList.add('hit');
+      status.textContent = 'Got it: ' + code;
+      handleBarcode(code);
+    },
   })
     .then((h) => {
       scanHandle = h;
-      const torch = document.getElementById('torchBtn');
-      torch.style.display = h.torchAvailable ? 'block' : 'none';
+      document.getElementById('torchBtn').style.display = h.torchAvailable ? 'block' : 'none';
     })
     .catch((err) => {
       console.error(err);
@@ -1434,6 +1495,8 @@ async function handlePhoto(input) {
   try {
     const code = await decodeImageFile(file);
     if (code) {
+      successFeedback();
+      status.textContent = 'Got it: ' + code;
       handleBarcode(code);
     } else {
       status.textContent = 'No barcode found in that photo. Try again with the barcode filling more of the frame and in focus, or type the digits below.';
@@ -1443,6 +1506,16 @@ async function handlePhoto(input) {
     status.textContent = (e.message || 'Could not read that photo.') + ' Type the digits below instead.';
   } finally {
     input.value = '';
+  }
+}
+
+async function copyDiag() {
+  const text = document.getElementById('scanDiag').innerText;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Diagnostics copied');
+  } catch {
+    toast(text);
   }
 }
 
@@ -1472,16 +1545,29 @@ async function handleBarcode(code) {
   if (scanHandle) { scanHandle.stop(); scanHandle = null; }
   const status = document.getElementById('scanStatus');
   document.getElementById('scanWrap').style.display = 'none';
+  document.getElementById('scanHint').style.display = 'none';
   status.textContent = 'Looking up ' + code + '…';
 
-  // The shared cache first: instant, and it works with no signal.
+  // 1. Your own saved foods. Instant, works with no signal, and it's your own
+  //    corrected numbers rather than a database's guess.
+  const mine = foods.find((f) => f.barcode === code);
+  if (mine) {
+    closeScanner();
+    setDraft(mine, mine.id);
+    toast(`${mine.name} — your saved entry`);
+    return;
+  }
+
+  // 2. The shared cache, which includes anything you or anyone else has taught it.
   let cand = null;
   try {
     const cached = await store.getCachedBarcode(code);
     if (cached) cand = cacheToCandidate(cached, code);
   } catch { /* cache is optional */ }
 
+  // 3. Open Food Facts, then USDA.
   if (!cand) {
+    status.textContent = 'Checking Open Food Facts and USDA…';
     try {
       cand = await lookupBarcode(code, { usdaKey: localStorage.getItem(USDA_KEY_STORAGE) });
       if (cand) store.cacheBarcode(code, candidateToCache(cand));
@@ -1490,15 +1576,22 @@ async function handleBarcode(code) {
     }
   }
 
-  if (!cand) {
-    status.textContent = `Nothing found for ${code}. It may not be in the databases yet — close this and type it off the label, and it'll be saved as a quick add.`;
+  if (cand) {
+    closeScanner();
+    setDraft(candidateToFood({ ...cand, barcode: code }), null);
+    toast(`Found ${cand.name}`);
     return;
   }
 
+  // 4. Nobody has it. Teach it once and it's permanent.
   closeScanner();
-  const food = candidateToFood(cand);
-  setDraft(food, null);
-  toast(`Found ${cand.name}`);
+  pendingBarcode = code;
+  openLogModal(draftMeal);
+  pendingBarcode = code; // openLogModal resets state, so set it again
+  document.getElementById('npCode').textContent = code;
+  document.getElementById('newProductBanner').style.display = 'flex';
+  document.getElementById('mSaveSpot').checked = true;
+  document.getElementById('mName').focus();
 }
 
 /* ---------- editing the numbers ---------- */
@@ -1571,7 +1664,7 @@ Object.assign(window, {
   openQuickAdd, closeQuickAdd, submitQuickAdd,
   openSettingsModal, closeSettingsModal, saveUsdaKey, connectGoogle,
   runSearch, useCandidate,
-  openScanner, closeScanner, toggleTorch, lookupTypedBarcode, handlePhoto,
+  openScanner, closeScanner, toggleTorch, lookupTypedBarcode, handlePhoto, copyDiag,
   openEditStep, saveEditStep, addServRow, removeServ, setServ,
   toggleMicroFields, toggleDetail,
 });
