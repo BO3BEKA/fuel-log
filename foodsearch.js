@@ -223,6 +223,152 @@ export async function usdaLookupBarcode(barcode, apiKey) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Your own foods
+ * ------------------------------------------------------------------ */
+
+// Anything you have already saved or corrected is better than any database
+// guess, so it is searched first and shown at the top. Without this, a food you
+// typed in yourself was only reachable from the quick-add grid.
+export function foodToCandidate(food, source = 'Your foods') {
+  const byWeight = food.refUnit === 'g' || food.refUnit === 'ml';
+  const macros = {
+    cal: num(food.cal), pro: num(food.pro), carb: num(food.carb), fat: num(food.fat),
+  };
+  const micros = normalizeMicros(food.micros);
+  const serving = (food.servings || [])[0];
+
+  return {
+    key: 'local:' + (food.id || food.name),
+    name: food.name,
+    brand: '',
+    source,
+    baseUnit: food.refUnit === 'ml' ? 'ml' : 'g',
+    per100: byWeight && food.refAmount ? scaleObj({ ...macros }, 100 / food.refAmount) : null,
+    perServing: byWeight ? null : macros,
+    micros100: byWeight && food.refAmount ? scaleObj(micros, 100 / food.refAmount) : {},
+    microsServing: byWeight ? {} : micros,
+    serving: serving ? { label: serving.label, amount: serving.amount } : null,
+    barcode: food.barcode || null,
+    localFood: food,
+  };
+}
+
+// Word-based rather than substring, so "chicken rand" finds "Rand Grilled
+// Chicken" and a typo in one word does not lose the match entirely.
+export function matchLocalFoods(query, foods, limit = 6) {
+  const words = String(query).toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  if (!words.length || !Array.isArray(foods)) return [];
+
+  const scored = foods.map((f) => {
+    const name = String(f.name || '').toLowerCase();
+    let score = 0;
+    for (const w of words) {
+      if (name.includes(w)) score += w.length;
+      if (name.startsWith(w)) score += 3;
+    }
+    // Something you log constantly is more likely to be what you meant.
+    score += Math.min(5, Number(f.logCount) || 0);
+    return { f, score };
+  }).filter((x) => x.score > 0);
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map((x) => foodToCandidate(x.f));
+}
+
+/* ------------------------------------------------------------------ *
+ * Nutritionix (optional third source)
+ * ------------------------------------------------------------------ */
+
+// Best free coverage of US branded and restaurant food, which is exactly where
+// Open Food Facts and USDA are weakest. Needs a free app id and key, so it is
+// off unless those are set, and any failure is silent.
+export async function nutritionixSearch(query, creds, limit = 8) {
+  if (!creds || !creds.appId || !creds.appKey) return [];
+
+  const res = await fetch(
+    'https://trackapi.nutritionix.com/v2/search/instant?' +
+      new URLSearchParams({ query, branded: 'true', common: 'true', detailed: 'true' }),
+    { headers: { 'x-app-id': creds.appId, 'x-app-key': creds.appKey } }
+  );
+  if (!res.ok) {
+    const err = new Error('Nutritionix search failed with status ' + res.status);
+    err.status = res.status;
+    err.badKey = res.status === 401 || res.status === 403;
+    throw err;
+  }
+  const data = await res.json();
+
+  const out = [];
+  for (const b of (data.branded || []).slice(0, limit)) {
+    const grams = num(b.serving_weight_grams);
+    const perServing = {
+      cal: num(b.nf_calories), pro: num(b.nf_protein),
+      carb: num(b.nf_total_carbohydrate), fat: num(b.nf_total_fat),
+    };
+    if (!hasAny(perServing)) continue;
+    out.push({
+      key: 'nix:' + (b.nix_item_id || b.food_name),
+      name: b.food_name,
+      brand: b.brand_name || '',
+      source: 'Nutritionix',
+      baseUnit: 'g',
+      per100: grams > 0 ? scaleObj(perServing, 100 / grams) : null,
+      perServing,
+      micros100: {},
+      microsServing: {
+        sodium: num(b.nf_sodium), sugars: num(b.nf_sugars),
+        fiber: num(b.nf_dietary_fiber), cholesterol: num(b.nf_cholesterol),
+        satFat: num(b.nf_saturated_fat), potassium: num(b.nf_potassium),
+      },
+      serving: grams > 0
+        ? { label: `1 serving (${b.serving_qty || 1} ${b.serving_unit || ''})`.trim(), amount: grams }
+        : null,
+      barcode: b.upc || null,
+    });
+  }
+  return out;
+}
+
+export async function nutritionixBarcode(barcode, creds) {
+  if (!creds || !creds.appId || !creds.appKey) return null;
+  const res = await fetch(
+    'https://trackapi.nutritionix.com/v2/search/item?' + new URLSearchParams({ upc: barcode }),
+    { headers: { 'x-app-id': creds.appId, 'x-app-key': creds.appKey } }
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  const f = (data.foods || [])[0];
+  if (!f) return null;
+
+  const grams = num(f.serving_weight_grams);
+  const perServing = {
+    cal: num(f.nf_calories), pro: num(f.nf_protein),
+    carb: num(f.nf_total_carbohydrate), fat: num(f.nf_total_fat),
+  };
+  if (!hasAny(perServing)) return null;
+
+  return {
+    key: 'nix:' + barcode,
+    name: f.food_name,
+    brand: f.brand_name || '',
+    source: 'Nutritionix',
+    baseUnit: 'g',
+    per100: grams > 0 ? scaleObj(perServing, 100 / grams) : null,
+    perServing,
+    micros100: {},
+    microsServing: {
+      sodium: num(f.nf_sodium), sugars: num(f.nf_sugars),
+      fiber: num(f.nf_dietary_fiber), cholesterol: num(f.nf_cholesterol),
+      satFat: num(f.nf_saturated_fat), potassium: num(f.nf_potassium),
+    },
+    serving: grams > 0
+      ? { label: `1 serving (${f.serving_qty || 1} ${f.serving_unit || ''})`.trim(), amount: grams }
+      : null,
+    barcode,
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Combined search
  * ------------------------------------------------------------------ */
 

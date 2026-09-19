@@ -301,6 +301,13 @@ class LocalStore {
   async signInWithGoogle() {
     throw new Error("Add your Firebase config first.");
   }
+  async signUpWithEmail() {
+    throw new Error("Add your Firebase config first.");
+  }
+  async signInWithEmail() {
+    throw new Error("Add your Firebase config first.");
+  }
+  async signOut() {}
 
   redirectPending() { return false; }
   redirectError() { return null; }
@@ -724,6 +731,34 @@ class CloudStore {
     }
   }
 
+  // Email and password is the only method that never leaves the page, which
+  // makes it the one that works inside an installed app. On iOS a home-screen
+  // app has its own storage, separate from Safari, so a redirect to Google
+  // often cannot restore the session on the way back. This has no such problem.
+  //
+  // Linking rather than signing in keeps the anonymous uid, so everything
+  // logged before creating the account comes with it.
+  async signUpWithEmail(email, password) {
+    const { auth, EmailAuthProvider, linkWithCredential } = this.fb;
+    const cred = EmailAuthProvider.credential(email, password);
+    const res = await linkWithCredential(auth.currentUser, cred);
+    this._setStatus("Synced to " + (res.user.email || "your account"), "ok");
+    return res.user;
+  }
+
+  // Used on a second device, where the anonymous account holds nothing worth
+  // keeping and the goal is to adopt the existing one.
+  async signInWithEmail(email, password) {
+    const { auth, signInWithEmailAndPassword } = this.fb;
+    const res = await signInWithEmailAndPassword(auth, email, password);
+    this._setStatus("Synced to " + (res.user.email || "your account"), "ok");
+    return res.user;
+  }
+
+  async signOut() {
+    await this.fb.signOut(this.fb.auth);
+  }
+
   currentUser() {
     return this.fb.auth.currentUser;
   }
@@ -807,9 +842,14 @@ async function loadFirebase() {
     GoogleAuthProvider: authMod.GoogleAuthProvider,
     linkWithPopup: authMod.linkWithPopup,
     signInWithPopup: authMod.signInWithPopup,
+    EmailAuthProvider: authMod.EmailAuthProvider,
+    linkWithCredential: authMod.linkWithCredential,
+    signInWithEmailAndPassword: authMod.signInWithEmailAndPassword,
+    createUserWithEmailAndPassword: authMod.createUserWithEmailAndPassword,
     linkWithRedirect: authMod.linkWithRedirect,
     signInWithRedirect: authMod.signInWithRedirect,
     getRedirectResult: authMod.getRedirectResult,
+    signOut: authMod.signOut,
     doc: fsMod.doc,
     collection: fsMod.collection,
     query: fsMod.query,

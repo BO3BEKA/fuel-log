@@ -811,7 +811,22 @@
     <div class="settings-block" id="accountBlock">
       <h3>Account</h3>
       <p id="accountText">Checking…</p>
-      <button class="btn btn-ghost btn-block" id="linkGoogleBtn" onclick="connectGoogle()" style="display:none;">Keep my data — sign in with Google</button>
+
+      <div id="authForm" style="display:none;">
+        <div class="field"><label for="authEmail">Email</label>
+          <input id="authEmail" type="email" autocomplete="username" inputmode="email" placeholder="you@example.com"></div>
+        <div class="field"><label for="authPass">Password</label>
+          <input id="authPass" type="password" autocomplete="current-password" placeholder="at least 6 characters"></div>
+        <div class="row" style="display:flex;gap:8px;">
+          <button class="btn btn-primary" style="flex:1" onclick="doEmailAuth('signup')">Create account</button>
+          <button class="btn btn-ghost" style="flex:1" onclick="doEmailAuth('signin')">Sign in</button>
+        </div>
+        <p id="authHint" style="margin-top:8px;">Use <b>Create account</b> on the first device — it keeps everything
+          you've already logged. On your other devices use <b>Sign in</b> with the same email.</p>
+        <button class="btn btn-ghost btn-block" id="linkGoogleBtn" onclick="connectGoogle()" style="margin-top:8px;">Or use Google instead</button>
+      </div>
+
+      <button class="btn btn-ghost btn-block" id="signOutBtn" onclick="doSignOut()" style="display:none;">Sign out</button>
     </div>
   </div>
 </div>
@@ -972,29 +987,81 @@ function renderSyncPill(status) {
 
 function renderAccountBlock() {
   const text = document.getElementById('accountText');
-  const btn = document.getElementById('linkGoogleBtn');
+  const form = document.getElementById('authForm');
+  const out = document.getElementById('signOutBtn');
+
   if (!store || store.mode === 'local') {
     text.textContent = store && store.fellBack
       ? 'Firebase is configured but did not start, so this session is saving locally. Check the browser console for the reason.'
       : 'Running on this device only. Paste your Firebase config into firebase-config.js to sync across devices.';
-    btn.style.display = 'none';
+    form.style.display = 'none';
+    out.style.display = 'none';
     return;
   }
+
   const user = store.currentUser();
   if (user && !user.isAnonymous) {
-    text.textContent = 'Signed in as ' + (user.email || user.uid) + '. Your log follows you to any device.';
-    btn.style.display = 'none';
+    text.textContent = 'Signed in as ' + (user.email || user.uid) + '. Your log follows you to any device signed in to this account.';
+    form.style.display = 'none';
+    out.style.display = 'block';
     return;
   }
 
   const rErr = store.redirectError ? store.redirectError() : null;
-  if (rErr) {
-    text.textContent = 'The last sign-in attempt came back with: ' + (rErr.code || rErr.message) +
-      '. Your data is safe under the temporary account — try again, or open the site in Chrome.';
-  } else {
-    text.textContent = 'Your data is in the cloud under a temporary account. Clearing your browser data would cut you off from it. Sign in to make it permanent and to see the same log on your other devices.';
+  text.innerHTML = (rErr ? 'The last sign-in attempt returned: ' + escapeHtml(rErr.code || rErr.message) + '. ' : '') +
+    'Your data is in the cloud under a temporary account tied to this browser. ' +
+    'On iPhone, an app added to the home screen has <b>separate storage from Safari</b> — so it gets its own ' +
+    'temporary account and will not see your other log until you sign in here.';
+  form.style.display = 'block';
+  out.style.display = 'none';
+}
+
+async function doEmailAuth(mode) {
+  const email = document.getElementById('authEmail').value.trim();
+  const pass = document.getElementById('authPass').value;
+  const hint = document.getElementById('authHint');
+
+  if (!email.includes('@')) { hint.textContent = 'That does not look like an email address.'; return; }
+  if (pass.length < 6) { hint.textContent = 'Firebase needs a password of at least 6 characters.'; return; }
+
+  hint.textContent = mode === 'signup' ? 'Creating your account…' : 'Signing in…';
+  try {
+    if (mode === 'signup') await store.signUpWithEmail(email, pass);
+    else await store.signInWithEmail(email, pass);
+    document.getElementById('authPass').value = '';
+    renderAccountBlock();
+    toast('Signed in');
+  } catch (e) {
+    const code = e.code || '';
+    // Each of these needs a different action, so none of them get a generic message.
+    if (code.includes('email-already-in-use') || code.includes('credential-already-in-use')) {
+      hint.innerHTML = 'That email already has an account. Tap <b>Sign in</b> instead. ' +
+        'Anything logged on this device under its temporary account will not carry across — log it again after signing in.';
+    } else if (code.includes('wrong-password') || code.includes('invalid-credential')) {
+      hint.textContent = 'Wrong email or password.';
+    } else if (code.includes('user-not-found')) {
+      hint.innerHTML = 'No account with that email. Tap <b>Create account</b> instead.';
+    } else if (code.includes('weak-password')) {
+      hint.textContent = 'That password is too weak — six characters minimum.';
+    } else if (code.includes('operation-not-allowed')) {
+      hint.innerHTML = 'Email sign-in is switched off in Firebase. Enable <b>Email/Password</b> under ' +
+        'Authentication → Sign-in method, then try again.';
+    } else if (code.includes('network')) {
+      hint.textContent = 'No connection. Try again when you have signal.';
+    } else {
+      hint.textContent = 'Sign-in failed: ' + (code || e.message);
+    }
   }
-  btn.style.display = 'block';
+}
+
+async function doSignOut() {
+  if (!confirm('Sign out? Your data stays in the cloud and comes back when you sign in again.')) return;
+  try {
+    await store.signOut();
+    location.reload();
+  } catch (e) {
+    toast('Could not sign out: ' + (e.code || e.message));
+  }
 }
 
 function sortedFoods() {
@@ -2512,6 +2579,7 @@ Object.assign(window, {
   openEntryEdit, closeEntryEdit, saveEntryEdit, refreshEntryPreview, setEntryMeal,
   applyUpdate, doInstall, dismissInstall,
   exportData, deleteSeeds, ackSeeds,
+  doEmailAuth, doSignOut,
 });
 
 async function removeLogEntry(id) {
