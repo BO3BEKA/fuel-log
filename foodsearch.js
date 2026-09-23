@@ -1,0 +1,722 @@
+// foodsearch.js — turns Open Food Facts and USDA responses into one shape.
+//
+// Why two sources: USDA's branded database is manufacturer-submitted and goes
+// stale when a product is reformulated. Open Food Facts is crowdsourced from
+// actual package photos, so it's often fresher on branded goods but patchier on
+// generic ingredients. USDA's Foundation and SR Legacy sets are the opposite —
+// authoritative for "chicken breast, raw", useless for "Chobani Zero".
+//
+// So: barcode lookups try Open Food Facts first, text search runs both and
+// labels every result with where it came from, and you get the final say.
+//
+// Everything here normalises to one Candidate shape:
+//   { key, name, brand, source, per100, serving, perServing, barcode }
+//     per100     — { cal, pro, carb, fat } per 100 g or ml, or null
+//     serving     — { label, amount } in the same unit as per100, or null
+//     perServing  — { cal, pro, carb, fat } for one serving, or null
+
+import {
+  extractFromOFF, extractFromUSDAPer100, extractFromUSDALabel,
+  normalizeMicros, hasAnyMicros, NUTRIENT_IDS,
+} from './nutrients.js';
+
+const OFF_BASE = 'https://world.openfoodfacts.org';
+const USDA_BASE = 'https://api.nal.usda.gov/fdc/v1';
+
+const num = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+const hasAny = (m) => !!m && (m.cal > 0 || m.pro > 0 || m.carb > 0 || m.fat > 0);
+
+/* ------------------------------------------------------------------ *
+ * Open Food Facts
+ * ------------------------------------------------------------------ */
+
+// OFF stores a base unit per product: 'g' for solids, 'ml' for drinks.
+function offBaseUnit(p) {
+  const qty = String(p.quantity || '').toLowerCase();
+  const unit = String(p.product_quantity_unit || '').toLowerCase();
+  if (unit === 'ml' || unit === 'l' || /\d\s*(ml|l|fl)\b/.test(qty)) return 'ml';
+  return 'g';
+}
+
+export function normalizeOFFProduct(p, barcode) {
+  if (!p) return null;
+  const n = p.nutriments || {};
+  const name = String(p.product_name || p.generic_name || '').trim();
+  if (!name) return null;
+
+  const per100 = {
+    cal: num(n['energy-kcal_100g']),
+    pro: num(n.proteins_100g),
+    carb: num(n.carbohydrates_100g),
+    fat: num(n.fat_100g),
+  };
+  const perServing = {
+    cal: num(n['energy-kcal_serving']),
+    pro: num(n.proteins_serving),
+    carb: num(n.carbohydrates_serving),
+    fat: num(n.fat_serving),
+  };
+
+  // serving_quantity is in the product's base unit; serving_size is the human
+  // string off the label ("170 g", "1 container (150g)").
+  const servingAmount = num(p.serving_quantity);
+  const servingLabel = String(p.serving_size || '').trim();
+
+  const micros100 = extractFromOFF(n, '_100g');
+  const microsServing = extractFromOFF(n, '_serving');
+
+  const cand = {
+    key: 'off:' + (barcode || p.code || name),
+    name,
+    brand: String(p.brands || '').split(',')[0].trim(),
+    source: 'Open Food Facts',
+    baseUnit: offBaseUnit(p),
+    per100: hasAny(per100) ? per100 : null,
+    perServing: hasAny(perServing) ? perServing : null,
+    micros100: micros100,
+    microsServing: microsServing,
+    serving: servingAmount > 0 ? { label: servingLabel || '1 serving', amount: servingAmount } : null,
+    barcode: barcode || p.code || null,
+  };
+
+  if (!cand.per100 && !cand.perServing) return null;
+  return cand;
+}
+
+export async function offLookupBarcode(barcode) {
+  const fields = [
+    'code', 'product_name', 'generic_name', 'brands', 'quantity',
+    'product_quantity_unit', 'serving_size', 'serving_quantity', 'nutriments',
+  ].join(',');
+  const url = `${OFF_BASE}/api/v2/product/${encodeURIComponent(barcode)}.json?fields=${fields}`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (data.status !== 1 && !data.product) return null;
+  return normalizeOFFProduct(data.product, barcode);
+}
+
+export async function offSearch(query, limit = 6) {
+  const fields = [
+    'code', 'product_name', 'generic_name', 'brands', 'quantity',
+    'product_quantity_unit', 'serving_size', 'serving_quantity', 'nutriments',
+  ].join(',');
+  const url = `${OFF_BASE}/cgi/search.pl?search_terms=${encodeURIComponent(query)}` +
+    `&search_simple=1&action=process&json=1&page_size=${limit}&fields=${fields}`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.products || [])
+    .map((p) => normalizeOFFProduct(p, p.code))
+    .filter(Boolean);
+}
+
+/* ------------------------------------------------------------------ *
+ * USDA FoodData Central
+ * ------------------------------------------------------------------ */
+
+// USDA returns two nutrients both named "Energy" — one KCAL, one KJ — in no
+// guaranteed order. Without the unit filter you silently take a 4.184x
+// overcount.
+export function pickNutrient(nutrients, matchNames, unit) {
+  if (!nutrients) return 0;
+  const unitOk = (x) => !unit || String(x.unitName || '').toUpperCase() === unit;
+  for (const x of nutrients) {
+    if (!unitOk(x)) continue;
+    const nm = String(x.nutrientName || '').toLowerCase();
+    if (matchNames.some((m) => nm === m)) return num(x.value);
+  }
+  for (const x of nutrients) {
+    if (!unitOk(x)) continue;
+    const nm = String(x.nutrientName || '').toLowerCase();
+    if (matchNames.some((m) => nm.includes(m))) return num(x.value);
+  }
+  return 0;
+}
+
+function usdaServingUnit(f) {
+  const u = String(f.servingSizeUnit || '').toLowerCase();
+  if (u === 'ml' || u === 'mlt') return 'ml';
+  if (u === 'g' || u === 'grm' || u === 'gram') return 'g';
+  return '';
+}
+
+export function normalizeUSDAFood(f) {
+  if (!f || !f.description) return null;
+  const branded = !!f.labelNutrients || f.dataType === 'Branded';
+  const nutrients = f.foodNutrients || [];
+
+  // For every USDA data type, foodNutrients is per 100 g.
+  const per100 = {
+    cal: pickNutrient(nutrients, ['energy'], 'KCAL'),
+    pro: pickNutrient(nutrients, ['protein'], 'G'),
+    carb: pickNutrient(nutrients, ['carbohydrate, by difference', 'carbohydrate'], 'G'),
+    fat: pickNutrient(nutrients, ['total lipid (fat)', 'fat'], 'G'),
+  };
+
+  // labelNutrients is the printed panel — per serving, not per 100 g.
+  const L = f.labelNutrients || {};
+  const perServing = {
+    cal: num(L.calories?.value),
+    pro: num(L.protein?.value),
+    carb: num(L.carbohydrates?.value),
+    fat: num(L.fat?.value),
+  };
+
+  const micros100 = extractFromUSDAPer100(nutrients);
+  const microsServing = extractFromUSDALabel(L);
+
+  const sUnit = usdaServingUnit(f);
+  const sAmount = num(f.servingSize);
+  const baseUnit = sUnit === 'ml' ? 'ml' : 'g';
+
+  const cand = {
+    key: 'usda:' + (f.fdcId || f.description),
+    name: String(f.description).trim(),
+    brand: String(f.brandName || f.brandOwner || '').trim(),
+    source: branded ? 'USDA branded' : 'USDA reference',
+    baseUnit,
+    per100: hasAny(per100) ? per100 : null,
+    perServing: hasAny(perServing) ? perServing : null,
+    micros100: micros100,
+    microsServing: microsServing,
+    serving: sAmount > 0 && sUnit ? { label: `1 serving (${sAmount}${sUnit})`, amount: sAmount } : null,
+    barcode: f.gtinUpc || null,
+    stale: branded, // manufacturer-submitted; worth a nudge to double-check
+  };
+
+  if (!cand.per100 && !cand.perServing) return null;
+  return cand;
+}
+
+export async function usdaSearch(query, apiKey, limit = 8) {
+  if (!apiKey) return [];
+  // Restricting the data types keeps out the Experimental and Survey sets,
+  // which are the main source of nonsense matches.
+  const url = `${USDA_BASE}/foods/search?api_key=${encodeURIComponent(apiKey)}` +
+    `&query=${encodeURIComponent(query)}&pageSize=${limit}` +
+    `&dataType=${encodeURIComponent('Branded,Foundation,SR Legacy')}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    // 429 means the key is over its hourly allowance, which is a completely
+    // different problem from a key that is wrong, so the two are kept apart.
+    const err = new Error('USDA search failed with status ' + res.status);
+    err.status = res.status;
+    err.rateLimited = res.status === 429;
+    err.badKey = res.status === 403 || res.status === 401;
+    throw err;
+  }
+  const data = await res.json();
+  return (data.foods || []).map(normalizeUSDAFood).filter(Boolean);
+}
+
+export async function usdaLookupBarcode(barcode, apiKey) {
+  if (!apiKey) return null;
+  const hits = await usdaSearch(barcode, apiKey, 5);
+  // Only trust it if the UPC actually matches — a bare number query will
+  // happily return unrelated foods.
+  const digits = String(barcode).replace(/^0+/, '');
+  return hits.find((h) => h.barcode && String(h.barcode).replace(/^0+/, '') === digits) || null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Your own foods
+ * ------------------------------------------------------------------ */
+
+// Anything you have already saved or corrected is better than any database
+// guess, so it is searched first and shown at the top. Without this, a food you
+// typed in yourself was only reachable from the quick-add grid.
+export function foodToCandidate(food, source = 'Your foods') {
+  const byWeight = food.refUnit === 'g' || food.refUnit === 'ml';
+  const macros = {
+    cal: num(food.cal), pro: num(food.pro), carb: num(food.carb), fat: num(food.fat),
+  };
+  const micros = normalizeMicros(food.micros);
+  const serving = (food.servings || [])[0];
+
+  return {
+    key: 'local:' + (food.id || food.name),
+    name: food.name,
+    brand: '',
+    source,
+    baseUnit: food.refUnit === 'ml' ? 'ml' : 'g',
+    per100: byWeight && food.refAmount ? scaleObj({ ...macros }, 100 / food.refAmount) : null,
+    perServing: byWeight ? null : macros,
+    micros100: byWeight && food.refAmount ? scaleObj(micros, 100 / food.refAmount) : {},
+    microsServing: byWeight ? {} : micros,
+    serving: serving ? { label: serving.label, amount: serving.amount } : null,
+    barcode: food.barcode || null,
+    localFood: food,
+  };
+}
+
+// Word-based rather than substring, so "chicken rand" finds "Rand Grilled
+// Chicken" and a typo in one word does not lose the match entirely.
+export function matchLocalFoods(query, foods, limit = 6) {
+  const words = String(query).toLowerCase().split(/\s+/).filter((w) => w.length > 1);
+  if (!words.length || !Array.isArray(foods)) return [];
+
+  const scored = foods.map((f) => {
+    const name = String(f.name || '').toLowerCase();
+    let matched = 0;
+    for (const w of words) {
+      if (name.includes(w)) matched += w.length;
+      if (name.startsWith(w)) matched += 3;
+    }
+    // The popularity bonus only applies once something has actually matched.
+    // Adding it first made every frequently-logged food score above zero and
+    // turn up for every query, matching or not.
+    const score = matched > 0 ? matched + Math.min(5, Number(f.logCount) || 0) : 0;
+    return { f, score };
+  }).filter((x) => x.score > 0);
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map((x) => foodToCandidate(x.f));
+}
+
+/* ------------------------------------------------------------------ *
+ * Nutritionix (optional third source)
+ * ------------------------------------------------------------------ */
+
+// Best free coverage of US branded and restaurant food, which is exactly where
+// Open Food Facts and USDA are weakest. Needs a free app id and key, so it is
+// off unless those are set, and any failure is silent.
+export async function nutritionixSearch(query, creds, limit = 8) {
+  if (!creds || !creds.appId || !creds.appKey) return [];
+
+  const res = await fetch(
+    'https://trackapi.nutritionix.com/v2/search/instant?' +
+      new URLSearchParams({ query, branded: 'true', common: 'true', detailed: 'true' }),
+    { headers: { 'x-app-id': creds.appId, 'x-app-key': creds.appKey } }
+  );
+  if (!res.ok) {
+    const err = new Error('Nutritionix search failed with status ' + res.status);
+    err.status = res.status;
+    err.badKey = res.status === 401 || res.status === 403;
+    throw err;
+  }
+  const data = await res.json();
+
+  const out = [];
+  for (const b of (data.branded || []).slice(0, limit)) {
+    const grams = num(b.serving_weight_grams);
+    const perServing = {
+      cal: num(b.nf_calories), pro: num(b.nf_protein),
+      carb: num(b.nf_total_carbohydrate), fat: num(b.nf_total_fat),
+    };
+    if (!hasAny(perServing)) continue;
+    out.push({
+      key: 'nix:' + (b.nix_item_id || b.food_name),
+      name: b.food_name,
+      brand: b.brand_name || '',
+      source: 'Nutritionix',
+      baseUnit: 'g',
+      per100: grams > 0 ? scaleObj(perServing, 100 / grams) : null,
+      perServing,
+      micros100: {},
+      microsServing: {
+        sodium: num(b.nf_sodium), sugars: num(b.nf_sugars),
+        fiber: num(b.nf_dietary_fiber), cholesterol: num(b.nf_cholesterol),
+        satFat: num(b.nf_saturated_fat), potassium: num(b.nf_potassium),
+      },
+      serving: grams > 0
+        ? { label: `1 serving (${b.serving_qty || 1} ${b.serving_unit || ''})`.trim(), amount: grams }
+        : null,
+      barcode: b.upc || null,
+    });
+  }
+  return out;
+}
+
+export async function nutritionixBarcode(barcode, creds) {
+  if (!creds || !creds.appId || !creds.appKey) return null;
+  const res = await fetch(
+    'https://trackapi.nutritionix.com/v2/search/item?' + new URLSearchParams({ upc: barcode }),
+    { headers: { 'x-app-id': creds.appId, 'x-app-key': creds.appKey } }
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  const f = (data.foods || [])[0];
+  if (!f) return null;
+
+  const grams = num(f.serving_weight_grams);
+  const perServing = {
+    cal: num(f.nf_calories), pro: num(f.nf_protein),
+    carb: num(f.nf_total_carbohydrate), fat: num(f.nf_total_fat),
+  };
+  if (!hasAny(perServing)) return null;
+
+  return {
+    key: 'nix:' + barcode,
+    name: f.food_name,
+    brand: f.brand_name || '',
+    source: 'Nutritionix',
+    baseUnit: 'g',
+    per100: grams > 0 ? scaleObj(perServing, 100 / grams) : null,
+    perServing,
+    micros100: {},
+    microsServing: {
+      sodium: num(f.nf_sodium), sugars: num(f.nf_sugars),
+      fiber: num(f.nf_dietary_fiber), cholesterol: num(f.nf_cholesterol),
+      satFat: num(f.nf_saturated_fat), potassium: num(f.nf_potassium),
+    },
+    serving: grams > 0
+      ? { label: `1 serving (${f.serving_qty || 1} ${f.serving_unit || ''})`.trim(), amount: grams }
+      : null,
+    barcode,
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Name-only barcode lookup
+ * ------------------------------------------------------------------ */
+
+// Product-identification databases know far more barcodes than nutrition
+// databases do, but carry no macros. Worth asking anyway: knowing a scan is
+// "Chobani Zero Milk & Cookies" turns typing in a whole unknown product into
+// just filling in the numbers, and the name ends up correct rather than
+// whatever you would have typed.
+export async function upcNameLookup(barcode) {
+  try {
+    const res = await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc=' + encodeURIComponent(barcode));
+    if (!res.ok) return null;
+    const data = await res.json();
+    const item = (data.items || [])[0];
+    if (!item || !item.title) return null;
+    return {
+      nameOnly: true,
+      name: String(item.title).slice(0, 200),
+      brand: String(item.brand || '').slice(0, 100),
+      barcode,
+    };
+  } catch {
+    return null; // free tier, no key, best effort
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Combined search
+ * ------------------------------------------------------------------ */
+
+// Branded queries want Open Food Facts first; single-ingredient queries want
+// USDA's reference sets. Rather than guess, run both and interleave, so the
+// right answer is near the top either way.
+export async function searchFoods(query, { usdaKey, nutritionix, localFoods } = {}) {
+  const errors = [];
+
+  // Your own saved foods come first and cost nothing — they are already in
+  // memory, they are your corrected numbers, and they work offline.
+  const local = matchLocalFoods(query, localFoods);
+
+  const run = async (q) => {
+    const [offRes, usdaRes, nixRes] = await Promise.allSettled([
+      offSearch(q, 20),
+      usdaSearch(q, usdaKey, 12),
+      nutritionixSearch(q, nutritionix, 10),
+    ]);
+    return {
+      off: offRes.status === 'fulfilled' ? offRes.value : [],
+      usda: usdaRes.status === 'fulfilled' ? usdaRes.value : [],
+      nix: nixRes.status === 'fulfilled' ? nixRes.value : [],
+      offErr: offRes.status === 'rejected' ? offRes.reason : null,
+      usdaErr: usdaRes.status === 'rejected' ? usdaRes.reason : null,
+      nixErr: nixRes.status === 'rejected' ? nixRes.reason : null,
+    };
+  };
+
+  let r = await run(query);
+
+  if (r.offErr) errors.push('Open Food Facts unreachable');
+  if (r.usdaErr) {
+    if (r.usdaErr.rateLimited) errors.push('USDA hourly limit reached — add your own key in Settings to skip the queue');
+    else if (r.usdaErr.badKey) errors.push('USDA key rejected — check it in Settings');
+    else errors.push('USDA unreachable');
+  }
+  if (r.nixErr) errors.push(r.nixErr.badKey ? 'Nutritionix keys rejected' : 'Nutritionix unreachable');
+  if (!usdaKey) errors.push('No USDA key, so no USDA results');
+
+  // Thin results usually mean the query was too specific. Retrying with just
+  // the longest couple of words catches "chobani zero milk and cookies" as
+  // "chobani cookies", which the databases do have.
+  let widened = false;
+  const firstCount = r.off.length + r.usda.length + r.nix.length;
+  if (firstCount < 5) {
+    const words = String(query).toLowerCase().split(/\s+/)
+      .filter((w) => w.length > 2 && !['the', 'and', 'with', 'for'].includes(w));
+    const simpler = words.sort((a, b) => b.length - a.length).slice(0, 2).join(' ');
+    if (simpler && simpler !== query.toLowerCase().trim()) {
+      const r2 = await run(simpler);
+      r = {
+        off: [...r.off, ...r2.off],
+        usda: [...r.usda, ...r2.usda],
+        nix: [...r.nix, ...r2.nix],
+      };
+      widened = true;
+    }
+  }
+
+  // Ordering reflects how much each source can be trusted for what it holds.
+  // USDA reference is authoritative for plain ingredients; Nutritionix and
+  // Open Food Facts are far better on branded goods; USDA branded is
+  // manufacturer-submitted and goes stale, so it goes last.
+  const refs = r.usda.filter((c) => c.source === 'USDA reference');
+  const usdaBranded = r.usda.filter((c) => c.source === 'USDA branded');
+
+  const seen = new Set();
+  const localNames = new Set(local.map((c) => c.name.toLowerCase().replace(/\s+/g, ' ').trim()));
+  const out = [];
+  for (const c of [...local, ...refs, ...r.nix, ...r.off, ...usdaBranded]) {
+    const name = c.name.toLowerCase().replace(/\s+/g, ' ').trim();
+    const sig = (c.brand + '|' + name).toLowerCase().trim();
+    if (seen.has(sig)) continue;
+    // Your own version of a food wins over a database's copy of the same name.
+    if (c.source !== 'Your foods' && localNames.has(name)) continue;
+    seen.add(sig);
+    out.push(c);
+  }
+
+  if (widened && out.length) errors.push('Few exact matches, so the search was widened');
+
+  return { results: out.slice(0, 24), errors };
+}
+
+// A scanned UPC-A (12 digits) and the EAN-13 stored in a database differ by a
+// leading zero, and entries exist both ways. Try the sensible variants.
+export function barcodeVariants(code) {
+  const c = String(code).replace(/\D/g, '');
+  const out = new Set([c]);
+  if (c.length === 12) out.add('0' + c);
+  if (c.length === 13 && c.startsWith('0')) out.add(c.slice(1));
+  if (c.length === 8) out.add(c.padStart(13, '0'));
+  return [...out];
+}
+
+// Barcode lookup, widest net first. Each source knows barcodes the others do
+// not, and Open Food Facts in particular is thin on US store brands.
+export async function lookupBarcode(barcode, { usdaKey, nutritionix } = {}) {
+  // 1. Open Food Facts — the barcode-native database, no key needed.
+  for (const variant of barcodeVariants(barcode)) {
+    try {
+      const hit = await offLookupBarcode(variant);
+      if (hit) return hit;
+    } catch (e) {
+      console.warn('OFF barcode lookup failed for', variant, e);
+    }
+  }
+
+  // 2. Nutritionix — the best coverage of US branded products, when configured.
+  try {
+    const hit = await nutritionixBarcode(barcode, nutritionix);
+    if (hit) return hit;
+  } catch (e) {
+    console.warn('Nutritionix barcode lookup failed', e);
+  }
+
+  // 3. USDA branded, which carries the UPC on its own records.
+  try {
+    const hit = await usdaLookupBarcode(barcode, usdaKey);
+    if (hit) return hit;
+  } catch (e) {
+    console.warn('USDA barcode lookup failed', e);
+  }
+
+  // 4. Nobody has nutrition for it, but a product database may still know what
+  // it is. A name is most of the work of adding it.
+  try {
+    const named = await upcNameLookup(barcode);
+    if (named) return named;
+  } catch { /* best effort */ }
+
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Candidate -> food (the shape portions.js and store.js use)
+ * ------------------------------------------------------------------ */
+
+export function candidateToFood(c) {
+  const displayName = c.brand && !c.name.toLowerCase().includes(c.brand.toLowerCase())
+    ? `${c.brand} ${c.name}`
+    : c.name;
+
+  const per100Micros = normalizeMicros(c.micros100);
+  const servingMicros = normalizeMicros(c.microsServing);
+  const servingAmount = c.serving && c.serving.amount > 0 ? c.serving.amount : 0;
+
+  // Micros have to end up on the same basis as the macros, or a 150 g yogurt
+  // logs its sodium as though it were 100 g.
+  const microsPer100 = hasAnyMicros(per100Micros)
+    ? per100Micros
+    : (hasAnyMicros(servingMicros) && servingAmount > 0
+        ? scaleObj(servingMicros, 100 / servingAmount)
+        : {});
+
+  // Best case: a per-100 rate, so grams and ounces both work, with the label
+  // serving kept as a named one-tap portion.
+  if (c.per100) {
+    const servings = c.serving ? [{ label: c.serving.label, amount: c.serving.amount }] : [];
+    return {
+      name: displayName,
+      cal: c.per100.cal, pro: c.per100.pro, carb: c.per100.carb, fat: c.per100.fat,
+      micros: microsPer100,
+      refAmount: 100,
+      refUnit: c.baseUnit === 'ml' ? 'ml' : 'g',
+      servings,
+      defaultQty: servings.length ? 1 : 100,
+      defaultUnitId: servings.length ? 's0' : (c.baseUnit === 'ml' ? 'ml' : 'g'),
+      barcode: c.barcode || null,
+    };
+  }
+
+  // Only a label panel and a gram weight: convert back to a per-100 rate so it
+  // still scales by weight.
+  if (c.perServing && servingAmount > 0) {
+    const f = 100 / servingAmount;
+    return {
+      name: displayName,
+      cal: c.perServing.cal * f, pro: c.perServing.pro * f,
+      carb: c.perServing.carb * f, fat: c.perServing.fat * f,
+      micros: microsPer100,
+      refAmount: 100,
+      refUnit: c.baseUnit === 'ml' ? 'ml' : 'g',
+      servings: [{ label: c.serving.label, amount: c.serving.amount }],
+      defaultQty: 1,
+      defaultUnitId: 's0',
+      barcode: c.barcode || null,
+    };
+  }
+
+  // A label panel with no weight at all. Servings are all we can honestly
+  // offer, so the micros stay on a per-serving basis too.
+  return {
+    name: displayName,
+    cal: c.perServing.cal, pro: c.perServing.pro, carb: c.perServing.carb, fat: c.perServing.fat,
+    micros: hasAnyMicros(servingMicros) ? servingMicros : per100Micros,
+    refAmount: 1,
+    refUnit: 'serving',
+    servings: [],
+    defaultQty: 1,
+    defaultUnitId: 'serving',
+    barcode: c.barcode || null,
+  };
+}
+
+function scaleObj(obj, factor) {
+  const out = {};
+  for (const k of Object.keys(obj || {})) {
+    const v = Number(obj[k]);
+    if (Number.isFinite(v) && v > 0) out[k] = v * factor;
+  }
+  return out;
+}
+
+// What a result row shows so you can spot a wrong match before logging it.
+export function candidateSummary(c) {
+  if (c.per100) {
+    return {
+      macros: c.per100,
+      basis: `per 100${c.baseUnit}`,
+    };
+  }
+  return {
+    macros: c.perServing,
+    basis: c.serving ? `per ${c.serving.label}` : 'per serving',
+  };
+}
+
+// Shape for the shared Firestore barcode cache. Must match the key list in
+// firestore.rules exactly or the write is rejected.
+export function candidateToCache(c) {
+  // Micros are nested inside the existing per100g / perServing maps on purpose.
+  // firestore.rules restricts TOP-LEVEL keys only, so nesting means the cache
+  // can carry new nutrients without republishing rules.
+  const per100 = c.per100 ? { ...c.per100, ...normalizeMicros(c.micros100) } : null;
+  const perServ = c.perServing ? { ...c.perServing, ...normalizeMicros(c.microsServing) } : null;
+  return {
+    name: c.name,
+    brand: c.brand || '',
+    per100g: per100,
+    perServing: perServ,
+    servingSize: c.serving ? c.serving.amount : 0,
+    servingUnit: c.serving ? c.serving.label : '',
+    source: c.source,
+    updatedAt: Date.now(),
+  };
+}
+
+function splitMacros(map) {
+  if (!map) return { macros: null, micros: {} };
+  const macros = {
+    cal: num(map.cal), pro: num(map.pro), carb: num(map.carb), fat: num(map.fat),
+  };
+  const micros = {};
+  for (const id of NUTRIENT_IDS) {
+    const v = Number(map[id]);
+    if (Number.isFinite(v) && v > 0) micros[id] = v;
+  }
+  return { macros: hasAny(macros) ? macros : null, micros };
+}
+
+// Turns a food you typed in yourself into a cache entry, so scanning that
+// barcode again finds it instantly — on any of your devices, and for anyone
+// else who scans the same product.
+export function foodToCacheEntry(food) {
+  const micros = normalizeMicros(food.micros);
+  const macros = {
+    cal: num(food.cal), pro: num(food.pro), carb: num(food.carb), fat: num(food.fat),
+  };
+  const byWeight = food.refUnit === 'g' || food.refUnit === 'ml';
+
+  // The cache is defined per 100 units, so rescale from whatever reference the
+  // food uses. A per-serving food has no weight basis, so it goes in the
+  // perServing slot instead.
+  let per100g = null;
+  let perServing = null;
+  let servingSize = 0;
+  let servingUnit = '';
+
+  if (byWeight) {
+    const f = 100 / (Number(food.refAmount) || 100);
+    per100g = { ...scaleObj({ ...macros, ...micros }, f) };
+    const s = (food.servings || [])[0];
+    if (s && s.amount > 0) {
+      servingSize = s.amount;
+      servingUnit = s.label;
+    }
+  } else {
+    perServing = { ...macros, ...micros };
+  }
+
+  return {
+    name: String(food.name || '').slice(0, 200),
+    brand: '',
+    per100g,
+    perServing,
+    servingSize,
+    servingUnit,
+    source: 'Typed from the label',
+    updatedAt: Date.now(),
+  };
+}
+
+export function cacheToCandidate(d, barcode) {
+  if (!d) return null;
+  const a = splitMacros(d.per100g);
+  const b = splitMacros(d.perServing);
+  return {
+    key: 'cache:' + barcode,
+    name: d.name,
+    brand: d.brand || '',
+    source: d.source || 'cached',
+    baseUnit: 'g',
+    per100: a.macros,
+    perServing: b.macros,
+    micros100: a.micros,
+    microsServing: b.micros,
+    serving: d.servingSize > 0 ? { label: d.servingUnit || '1 serving', amount: d.servingSize } : null,
+    barcode,
+  };
+}

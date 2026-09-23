@@ -190,6 +190,69 @@ export function describeTrend(lbsPerWeek) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Macro split
+ * ------------------------------------------------------------------ */
+
+// Atwater factors: the calories each gram of a macro actually provides.
+export const KCAL_PER_G = { pro: 4, carb: 4, fat: 9 };
+
+// The split is by CALORIES, not grams, because grams are not comparable — fat
+// carries 9 calories a gram against 4 for the other two, so 50g of fat is a
+// much larger share of a day than 50g of protein. Percentages by weight would
+// make fat look small when it is the biggest contributor.
+export function macroSplit(totals) {
+  const g = {
+    pro: Math.max(0, Number(totals?.pro) || 0),
+    carb: Math.max(0, Number(totals?.carb) || 0),
+    fat: Math.max(0, Number(totals?.fat) || 0),
+  };
+
+  const cal = {
+    pro: g.pro * KCAL_PER_G.pro,
+    carb: g.carb * KCAL_PER_G.carb,
+    fat: g.fat * KCAL_PER_G.fat,
+  };
+
+  const derived = cal.pro + cal.carb + cal.fat;
+  const logged = Math.max(0, Number(totals?.cal) || 0);
+
+  const pct = (v) => (derived > 0 ? (v / derived) * 100 : 0);
+
+  // Macro calories rarely match logged calories exactly — rounding, alcohol,
+  // fibre and sugar alcohols all drive a wedge between them. A small gap is
+  // normal; a large one usually means an entry is missing its macros.
+  const gap = logged > 0 && derived > 0 ? Math.abs(logged - derived) / logged : 0;
+
+  return {
+    empty: derived <= 0,
+    grams: g,
+    calories: cal,
+    derivedCal: derived,
+    loggedCal: logged,
+    parts: [
+      { id: 'carb', label: 'Carbs',   grams: g.carb, cal: cal.carb, pct: pct(cal.carb) },
+      { id: 'fat',  label: 'Fat',     grams: g.fat,  cal: cal.fat,  pct: pct(cal.fat) },
+      { id: 'pro',  label: 'Protein', grams: g.pro,  cal: cal.pro,  pct: pct(cal.pro) },
+    ],
+    // Flagged only when the gap is big enough to be a real discrepancy rather
+    // than rounding.
+    mismatch: gap > 0.15,
+    gapCal: Math.round(logged - derived),
+  };
+}
+
+// Turns percentages into SVG stroke-dasharray segments for a donut.
+export function donutSegments(parts, circumference) {
+  let offset = 0;
+  return parts.map((p) => {
+    const len = (p.pct / 100) * circumference;
+    const seg = { id: p.id, label: p.label, pct: p.pct, length: len, offset: -offset };
+    offset += len;
+    return seg;
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * Protein distribution across meals
  * ------------------------------------------------------------------ */
 
