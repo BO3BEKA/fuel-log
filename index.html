@@ -104,24 +104,39 @@
 
   .ring-card {
     background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
-    padding: 14px; margin-bottom: 20px; display: flex; align-items: center; gap: 16px;
+    padding: 16px; margin-bottom: 20px; display: flex; align-items: center; gap: 18px;
   }
-  .ring-wrap { flex: none; position: relative; width: 116px; height: 116px; }
-  .ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  /* A thinner stroke leaves a much larger hole, which is what makes the centre
+     text readable instead of cramped against the ring. */
+  .ring-wrap { flex: none; position: relative; width: 132px; height: 132px; }
+  .ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); display: block; }
   .ring-centre {
     position: absolute; inset: 0; display: flex; flex-direction: column;
     align-items: center; justify-content: center; text-align: center; pointer-events: none;
   }
-  .ring-centre .rc-big { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 700; line-height: 1; }
-  .ring-centre .rc-sub { font-size: 9.5px; color: var(--text-muted); margin-top: 3px; letter-spacing: 0.02em; }
-  .ring-legend { flex: 1; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
-  .ring-legend .lrow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
-  .ring-legend .dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
-  .ring-legend .lname { color: var(--text); flex: 1; }
-  .ring-legend .lpct { font-family: 'Space Grotesk', sans-serif; font-weight: 600; }
-  .ring-legend .lg { color: var(--text-muted); font-size: 11px; min-width: 42px; text-align: right; }
+  .ring-centre .rc-big {
+    font-family: 'Space Grotesk', sans-serif; font-size: 27px; font-weight: 700;
+    line-height: 1; letter-spacing: -0.02em;
+  }
+  .ring-centre .rc-sub { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+  .ring-legend { flex: 1; display: flex; flex-direction: column; gap: 11px; min-width: 0; }
+  .ring-legend .lrow { display: flex; align-items: baseline; gap: 9px; }
+  .ring-legend .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; align-self: center; }
+  .ring-legend .lname { color: var(--text); font-size: 13.5px; flex: 1; }
+  .ring-legend .lg { color: var(--text-muted); font-size: 12px; font-family: 'Space Grotesk', sans-serif; }
+  .ring-legend .lpct {
+    font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 700;
+    min-width: 44px; text-align: right;
+  }
   .ring-empty { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
-  .ring-note { font-size: 11px; color: var(--amber); margin-top: 10px; line-height: 1.5; }
+  .ring-note { font-size: 11px; color: var(--amber); margin-top: 4px; line-height: 1.5; }
+
+  @media (max-width: 380px) {
+    .ring-card { gap: 12px; padding: 13px; }
+    .ring-wrap { width: 112px; height: 112px; }
+    .ring-centre .rc-big { font-size: 23px; }
+  }
 
   .tier-break { height: 1px; background: var(--line); margin: 30px 0 4px; }
   .glance {
@@ -2198,7 +2213,8 @@ function ackSeeds() {
 
 /* ---------- macro ring ---------- */
 
-const RING_R = 45;
+const RING_R = 46;
+const RING_W = 11;                 // thinner than before, so the hole is bigger
 const RING_C = 2 * Math.PI * RING_R;
 const RING_COLOR = { carb: 'var(--macro-carb)', fat: 'var(--macro-fat)', pro: 'var(--macro-pro)' };
 
@@ -2214,13 +2230,13 @@ function renderRing(totals) {
 
   const segs = donutSegments(split.parts, RING_C);
 
-  // A single macro at 100% is drawn as a plain circle, because a dasharray
-  // covering the whole circumference leaves a hairline seam.
   const arcs = segs.map((seg) => {
     if (seg.length <= 0) return '';
+    // A dasharray covering the whole circumference leaves a hairline seam, so
+    // a single macro at 100% is drawn as a plain circle instead.
     const full = seg.pct >= 99.95;
     return `<circle cx="60" cy="60" r="${RING_R}" fill="none"
-      stroke="${RING_COLOR[seg.id]}" stroke-width="13"
+      stroke="${RING_COLOR[seg.id]}" stroke-width="${RING_W}"
       ${full ? '' : `stroke-dasharray="${seg.length.toFixed(2)} ${(RING_C - seg.length).toFixed(2)}"
       stroke-dashoffset="${seg.offset.toFixed(2)}"`} />`;
   }).join('');
@@ -2229,27 +2245,30 @@ function renderRing(totals) {
     <div class="lrow">
       <span class="dot" style="background:${RING_COLOR[p.id]}"></span>
       <span class="lname">${p.label}</span>
-      <span class="lg num">${round(p.grams)}g</span>
-      <span class="lpct num" style="color:${RING_COLOR[p.id]}">${Math.round(p.pct)}%</span>
+      <span class="lg">${round(p.grams)}g</span>
+      <span class="lpct" style="color:${RING_COLOR[p.id]}">${Math.round(p.pct)}%</span>
     </div>`).join('');
 
   const label = split.parts.map((p) => `${p.label} ${Math.round(p.pct)}%`).join(', ');
 
+  // The centre shows the calories the app reports everywhere else. Showing the
+  // macro-derived figure instead put two numbers a few calories apart on the
+  // same screen, which reads as a bug even when both are right.
   card.innerHTML = `
     <div class="ring-wrap">
       <svg viewBox="0 0 120 120" role="img" aria-label="Macro split: ${escapeAttr(label)}">
-        <circle cx="60" cy="60" r="${RING_R}" fill="none" stroke="var(--line)" stroke-width="13"/>
+        <circle cx="60" cy="60" r="${RING_R}" fill="none" stroke="var(--line)" stroke-width="${RING_W}"/>
         ${arcs}
       </svg>
       <div class="ring-centre">
-        <span class="rc-big num">${round(split.derivedCal)}</span>
-        <span class="rc-sub">CAL FROM MACROS</span>
+        <span class="rc-big num">${round(split.loggedCal || split.derivedCal)}</span>
+        <span class="rc-sub">calories</span>
       </div>
     </div>
     <div class="ring-legend">
       ${legend}
-      ${split.mismatch ? `<div class="ring-note">These macros account for ${round(split.derivedCal)} of the
-        ${round(split.loggedCal)} calories logged. Something probably went in without its macros filled in.</div>` : ''}
+      ${split.mismatch ? `<div class="ring-note">Only ${round(split.derivedCal)} of those calories have macros
+        attached — something was logged without them.</div>` : ''}
     </div>`;
 }
 
