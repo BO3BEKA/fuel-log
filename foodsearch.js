@@ -261,13 +261,15 @@ export function matchLocalFoods(query, foods, limit = 6) {
 
   const scored = foods.map((f) => {
     const name = String(f.name || '').toLowerCase();
-    let score = 0;
+    let matched = 0;
     for (const w of words) {
-      if (name.includes(w)) score += w.length;
-      if (name.startsWith(w)) score += 3;
+      if (name.includes(w)) matched += w.length;
+      if (name.startsWith(w)) matched += 3;
     }
-    // Something you log constantly is more likely to be what you meant.
-    score += Math.min(5, Number(f.logCount) || 0);
+    // The popularity bonus only applies once something has actually matched.
+    // Adding it first made every frequently-logged food score above zero and
+    // turn up for every query, matching or not.
+    const score = matched > 0 ? matched + Math.min(5, Number(f.logCount) || 0) : 0;
     return { f, score };
   }).filter((x) => x.score > 0);
 
@@ -369,50 +371,116 @@ export async function nutritionixBarcode(barcode, creds) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Name-only barcode lookup
+ * ------------------------------------------------------------------ */
+
+// Product-identification databases know far more barcodes than nutrition
+// databases do, but carry no macros. Worth asking anyway: knowing a scan is
+// "Chobani Zero Milk & Cookies" turns typing in a whole unknown product into
+// just filling in the numbers, and the name ends up correct rather than
+// whatever you would have typed.
+export async function upcNameLookup(barcode) {
+  try {
+    const res = await fetch('https://api.upcitemdb.com/prod/trial/lookup?upc=' + encodeURIComponent(barcode));
+    if (!res.ok) return null;
+    const data = await res.json();
+    const item = (data.items || [])[0];
+    if (!item || !item.title) return null;
+    return {
+      nameOnly: true,
+      name: String(item.title).slice(0, 200),
+      brand: String(item.brand || '').slice(0, 100),
+      barcode,
+    };
+  } catch {
+    return null; // free tier, no key, best effort
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Combined search
  * ------------------------------------------------------------------ */
 
 // Branded queries want Open Food Facts first; single-ingredient queries want
 // USDA's reference sets. Rather than guess, run both and interleave, so the
 // right answer is near the top either way.
-export async function searchFoods(query, { usdaKey } = {}) {
-  const [offRes, usdaRes] = await Promise.allSettled([
-    offSearch(query, 6),
-    usdaSearch(query, usdaKey, 8),
-  ]);
-
-  const off = offRes.status === 'fulfilled' ? offRes.value : [];
-  const usda = usdaRes.status === 'fulfilled' ? usdaRes.value : [];
-
+export async function searchFoods(query, { usdaKey, nutritionix, localFoods } = {}) {
   const errors = [];
-  if (offRes.status === 'rejected') errors.push('Open Food Facts unreachable');
-  if (usdaRes.status === 'rejected') {
-    const r = usdaRes.reason || {};
-    if (r.rateLimited) {
-      errors.push('USDA hourly limit reached — add your own key in Settings to skip the queue');
-    } else if (r.badKey) {
-      errors.push('USDA key rejected — check it in Settings');
-    } else {
-      errors.push('USDA unreachable');
+
+  // Your own saved foods come first and cost nothing — they are already in
+  // memory, they are your corrected numbers, and they work offline.
+  const local = matchLocalFoods(query, localFoods);
+
+  const run = async (q) => {
+    const [offRes, usdaRes, nixRes] = await Promise.allSettled([
+      offSearch(q, 20),
+      usdaSearch(q, usdaKey, 12),
+      nutritionixSearch(q, nutritionix, 10),
+    ]);
+    return {
+      off: offRes.status === 'fulfilled' ? offRes.value : [],
+      usda: usdaRes.status === 'fulfilled' ? usdaRes.value : [],
+      nix: nixRes.status === 'fulfilled' ? nixRes.value : [],
+      offErr: offRes.status === 'rejected' ? offRes.reason : null,
+      usdaErr: usdaRes.status === 'rejected' ? usdaRes.reason : null,
+      nixErr: nixRes.status === 'rejected' ? nixRes.reason : null,
+    };
+  };
+
+  let r = await run(query);
+
+  if (r.offErr) errors.push('Open Food Facts unreachable');
+  if (r.usdaErr) {
+    if (r.usdaErr.rateLimited) errors.push('USDA hourly limit reached — add your own key in Settings to skip the queue');
+    else if (r.usdaErr.badKey) errors.push('USDA key rejected — check it in Settings');
+    else errors.push('USDA unreachable');
+  }
+  if (r.nixErr) errors.push(r.nixErr.badKey ? 'Nutritionix keys rejected' : 'Nutritionix unreachable');
+  if (!usdaKey) errors.push('No USDA key, so no USDA results');
+
+  // Thin results usually mean the query was too specific. Retrying with just
+  // the longest couple of words catches "chobani zero milk and cookies" as
+  // "chobani cookies", which the databases do have.
+  let widened = false;
+  const firstCount = r.off.length + r.usda.length + r.nix.length;
+  if (firstCount < 5) {
+    const words = String(query).toLowerCase().split(/\s+/)
+      .filter((w) => w.length > 2 && !['the', 'and', 'with', 'for'].includes(w));
+    const simpler = words.sort((a, b) => b.length - a.length).slice(0, 2).join(' ');
+    if (simpler && simpler !== query.toLowerCase().trim()) {
+      const r2 = await run(simpler);
+      r = {
+        off: [...r.off, ...r2.off],
+        usda: [...r.usda, ...r2.usda],
+        nix: [...r.nix, ...r2.nix],
+      };
+      widened = true;
     }
   }
-  if (!usdaKey) errors.push('No USDA key, so these are Open Food Facts results only');
 
-  // USDA reference entries first (authoritative for real ingredients), then
-  // Open Food Facts branded, then USDA branded last since it's the stalest.
-  const refs = usda.filter((c) => c.source === 'USDA reference');
-  const usdaBranded = usda.filter((c) => c.source === 'USDA branded');
+  // Ordering reflects how much each source can be trusted for what it holds.
+  // USDA reference is authoritative for plain ingredients; Nutritionix and
+  // Open Food Facts are far better on branded goods; USDA branded is
+  // manufacturer-submitted and goes stale, so it goes last.
+  const refs = r.usda.filter((c) => c.source === 'USDA reference');
+  const usdaBranded = r.usda.filter((c) => c.source === 'USDA branded');
 
   const seen = new Set();
+  const localNames = new Set(local.map((c) => c.name.toLowerCase().replace(/\s+/g, ' ').trim()));
   const out = [];
-  for (const c of [...refs, ...off, ...usdaBranded]) {
-    const sig = (c.brand + '|' + c.name).toLowerCase();
+  for (const c of [...local, ...refs, ...r.nix, ...r.off, ...usdaBranded]) {
+    const name = c.name.toLowerCase().replace(/\s+/g, ' ').trim();
+    const sig = (c.brand + '|' + name).toLowerCase().trim();
     if (seen.has(sig)) continue;
+    // Your own version of a food wins over a database's copy of the same name.
+    if (c.source !== 'Your foods' && localNames.has(name)) continue;
     seen.add(sig);
     out.push(c);
   }
 
-  return { results: out.slice(0, 14), errors };
+  if (widened && out.length) errors.push('Few exact matches, so the search was widened');
+
+  return { results: out.slice(0, 24), errors };
 }
 
 // A scanned UPC-A (12 digits) and the EAN-13 stored in a database differ by a
@@ -426,8 +494,10 @@ export function barcodeVariants(code) {
   return [...out];
 }
 
-// Barcode: Open Food Facts is the barcode-native database, USDA is the backup.
-export async function lookupBarcode(barcode, { usdaKey } = {}) {
+// Barcode lookup, widest net first. Each source knows barcodes the others do
+// not, and Open Food Facts in particular is thin on US store brands.
+export async function lookupBarcode(barcode, { usdaKey, nutritionix } = {}) {
+  // 1. Open Food Facts — the barcode-native database, no key needed.
   for (const variant of barcodeVariants(barcode)) {
     try {
       const hit = await offLookupBarcode(variant);
@@ -436,12 +506,31 @@ export async function lookupBarcode(barcode, { usdaKey } = {}) {
       console.warn('OFF barcode lookup failed for', variant, e);
     }
   }
+
+  // 2. Nutritionix — the best coverage of US branded products, when configured.
   try {
-    return await usdaLookupBarcode(barcode, usdaKey);
+    const hit = await nutritionixBarcode(barcode, nutritionix);
+    if (hit) return hit;
+  } catch (e) {
+    console.warn('Nutritionix barcode lookup failed', e);
+  }
+
+  // 3. USDA branded, which carries the UPC on its own records.
+  try {
+    const hit = await usdaLookupBarcode(barcode, usdaKey);
+    if (hit) return hit;
   } catch (e) {
     console.warn('USDA barcode lookup failed', e);
-    return null;
   }
+
+  // 4. Nobody has nutrition for it, but a product database may still know what
+  // it is. A name is most of the work of adding it.
+  try {
+    const named = await upcNameLookup(barcode);
+    if (named) return named;
+  } catch { /* best effort */ }
+
+  return null;
 }
 
 /* ------------------------------------------------------------------ *

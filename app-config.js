@@ -32,3 +32,24 @@ export const hasSharedUsdaKey =
   typeof USDA_SHARED_KEY === "string" &&
   USDA_SHARED_KEY.length > 10 &&
   !USDA_SHARED_KEY.includes("PASTE_");
+
+// Nutritionix — optional third food source, and the best free coverage of US
+// branded and restaurant food, which is exactly where Open Food Facts and USDA
+// are weakest.
+//
+// Free keys at https://developer.nutritionix.com/signup — you get an app id
+// and an app key, both needed. The free tier is limited per day, so like the
+// USDA key these are shared across everyone using the app; anyone can put
+// their own in Settings to get their own allowance.
+//
+// Leave the placeholders and Nutritionix is simply skipped. Nothing breaks.
+export const NUTRITIONIX_APP_ID = "PASTE_NUTRITIONIX_APP_ID";
+export const NUTRITIONIX_APP_KEY = "PASTE_NUTRITIONIX_APP_KEY";
+
+export const hasSharedNutritionix =
+  typeof NUTRITIONIX_APP_ID === "string" &&
+  typeof NUTRITIONIX_APP_KEY === "string" &&
+  !NUTRITIONIX_APP_ID.includes("PASTE_") &&
+  !NUTRITIONIX_APP_KEY.includes("PASTE_") &&
+  NUTRITIONIX_APP_ID.length > 4 &&
+  NUTRITIONIX_APP_KEY.length > 8;

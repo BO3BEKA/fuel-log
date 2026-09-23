@@ -93,6 +93,36 @@
   .over .big { color: var(--danger); }
   .over .bar-fill { background: var(--danger); }
 
+  /* Macro ring colours, as asked for: carbs green, fat yellow, protein blue.
+     Kept as their own variables rather than reusing --sage/--amber/--blue so
+     the ring stays consistent even if the rest of the palette shifts. */
+  :root {
+    --macro-carb: #5b9c7a;
+    --macro-fat:  #d4b849;
+    --macro-pro:  #6f9bd1;
+  }
+
+  .ring-card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+    padding: 14px; margin-bottom: 20px; display: flex; align-items: center; gap: 16px;
+  }
+  .ring-wrap { flex: none; position: relative; width: 116px; height: 116px; }
+  .ring-wrap svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring-centre {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; pointer-events: none;
+  }
+  .ring-centre .rc-big { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 700; line-height: 1; }
+  .ring-centre .rc-sub { font-size: 9.5px; color: var(--text-muted); margin-top: 3px; letter-spacing: 0.02em; }
+  .ring-legend { flex: 1; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+  .ring-legend .lrow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .ring-legend .dot { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+  .ring-legend .lname { color: var(--text); flex: 1; }
+  .ring-legend .lpct { font-family: 'Space Grotesk', sans-serif; font-weight: 600; }
+  .ring-legend .lg { color: var(--text-muted); font-size: 11px; min-width: 42px; text-align: right; }
+  .ring-empty { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; }
+  .ring-note { font-size: 11px; color: var(--amber); margin-top: 10px; line-height: 1.5; }
+
   .tier-break { height: 1px; background: var(--line); margin: 30px 0 4px; }
   .glance {
     background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
@@ -471,6 +501,8 @@
 
   <div class="glance" id="glance"></div>
 
+  <div class="ring-card" id="ringCard"></div>
+
   <div class="micro-row">
     <div class="micro-card carbs"><span class="label">Carbs</span><span class="val num" id="carbsVal">0g</span></div>
     <div class="micro-card fat"><span class="label">Fat</span><span class="val num" id="fatVal">0g</span></div>
@@ -786,8 +818,18 @@
       <input id="usdaKeyInput" placeholder="Only needed if searches get rate limited">
       <small id="usdaHelp"></small>
     </div>
+    <div class="field">
+      <label for="nixIdInput">Your own Nutritionix app ID (optional)</label>
+      <input id="nixIdInput" placeholder="Leave blank to use the shared one">
+    </div>
+    <div class="field">
+      <label for="nixKeyInput">Your own Nutritionix app key (optional)</label>
+      <input id="nixKeyInput" placeholder="Leave blank to use the shared one">
+      <small id="nixHelp"></small>
+    </div>
+
     <div class="actions">
-      <button class="btn btn-primary" style="flex:1" onclick="saveUsdaKey()">Save key</button>
+      <button class="btn btn-primary" style="flex:1" onclick="saveApiKeys()">Save keys</button>
       <button class="btn btn-ghost" onclick="closeSettingsModal()">Close</button>
     </div>
 
@@ -842,10 +884,13 @@ import {
   candidateToCache, cacheToCandidate, foodToCacheEntry,
 } from './foodsearch.js';
 import { startScanner, cameraSupported, secureEnough, decodeImageFile, successFeedback, SCANNER_BUILD } from './scanner.js';
-import { USDA_SHARED_KEY, hasSharedUsdaKey } from './app-config.js';
+import {
+  USDA_SHARED_KEY, hasSharedUsdaKey,
+  NUTRITIONIX_APP_ID, NUTRITIONIX_APP_KEY, hasSharedNutritionix,
+} from './app-config.js';
 import {
   estimateTDEE, movingAverage, describeTrend, proteinSplit,
-  averageIntake, lastNDayKeys,
+  averageIntake, lastNDayKeys, macroSplit, donutSegments,
 } from './insights.js';
 import {
   NUTRIENT_IDS, NUTRIENT_GROUPS, NUTRIENT_BY_ID,
@@ -885,6 +930,19 @@ const USDA_KEY_STORAGE = 'fuellog:usdaKey';
 // shared key is the fallback so search works out of the box.
 function usdaKey() {
   return localStorage.getItem(USDA_KEY_STORAGE) || (hasSharedUsdaKey ? USDA_SHARED_KEY : '');
+}
+
+const NIX_ID_STORAGE = 'fuellog:nixId';
+const NIX_KEY_STORAGE = 'fuellog:nixKey';
+
+// Same rule as the USDA key: your own credentials win, the shared ones are the
+// fallback so it works without any setup.
+function nutritionixCreds() {
+  const id = localStorage.getItem(NIX_ID_STORAGE);
+  const key = localStorage.getItem(NIX_KEY_STORAGE);
+  if (id && key) return { appId: id, appKey: key };
+  if (hasSharedNutritionix) return { appId: NUTRITIONIX_APP_ID, appKey: NUTRITIONIX_APP_KEY };
+  return null;
 }
 
 /* ---------- dates ---------- */
@@ -1110,6 +1168,7 @@ function render() {
     document.getElementById('goalFatInput').value = goals.fat || '';
   }
 
+  renderRing(t);
   renderGlance(t);
   renderRecents();
   renderSeedWarning();
@@ -1532,22 +1591,55 @@ function renderUsdaHelp() {
   }
 }
 
+function renderNixHelp() {
+  const help = document.getElementById('nixHelp');
+  if (!help) return;
+  const own = localStorage.getItem(NIX_ID_STORAGE) && localStorage.getItem(NIX_KEY_STORAGE);
+  if (own) {
+    help.innerHTML = 'Using your own Nutritionix credentials.';
+  } else if (hasSharedNutritionix) {
+    help.innerHTML = 'A shared Nutritionix account is built in. Free keys of your own at ' +
+      '<a href="https://developer.nutritionix.com/signup" target="_blank" rel="noopener">developer.nutritionix.com</a> ' +
+      'if the shared one runs out.';
+  } else {
+    help.innerHTML = 'Nutritionix is off. It has the best coverage of US branded and restaurant food, which is ' +
+      'where the other two databases are weakest. Free keys at ' +
+      '<a href="https://developer.nutritionix.com/signup" target="_blank" rel="noopener">developer.nutritionix.com</a>.';
+  }
+}
+
 function openSettingsModal() {
   document.getElementById('usdaKeyInput').value = localStorage.getItem(USDA_KEY_STORAGE) || '';
+  document.getElementById('nixIdInput').value = localStorage.getItem(NIX_ID_STORAGE) || '';
+  document.getElementById('nixKeyInput').value = localStorage.getItem(NIX_KEY_STORAGE) || '';
   renderUsdaHelp();
+  renderNixHelp();
   renderAccountBlock();
   renderInstallBlock();
   document.getElementById('settingsBackdrop').classList.add('open');
 }
 function closeSettingsModal() { document.getElementById('settingsBackdrop').classList.remove('open'); }
-function saveUsdaKey() {
+function saveApiKeys() {
   const key = document.getElementById('usdaKeyInput').value.trim();
   if (key) localStorage.setItem(USDA_KEY_STORAGE, key);
   else localStorage.removeItem(USDA_KEY_STORAGE);
+
+  const nixId = document.getElementById('nixIdInput').value.trim();
+  const nixKey = document.getElementById('nixKeyInput').value.trim();
+  if (nixId && nixKey) {
+    localStorage.setItem(NIX_ID_STORAGE, nixId);
+    localStorage.setItem(NIX_KEY_STORAGE, nixKey);
+  } else {
+    localStorage.removeItem(NIX_ID_STORAGE);
+    localStorage.removeItem(NIX_KEY_STORAGE);
+  }
+
   renderUsdaHelp();
+  renderNixHelp();
   closeSettingsModal();
-  toast(key ? 'Using your own USDA key' : (hasSharedUsdaKey ? 'Back to the shared key' : 'USDA key cleared'));
+  toast('Keys saved');
 }
+
 async function connectGoogle() {
   const btn = document.getElementById('linkGoogleBtn');
   const text = document.getElementById('accountText');
@@ -2104,6 +2196,63 @@ function ackSeeds() {
   renderSeedWarning();
 }
 
+/* ---------- macro ring ---------- */
+
+const RING_R = 45;
+const RING_C = 2 * Math.PI * RING_R;
+const RING_COLOR = { carb: 'var(--macro-carb)', fat: 'var(--macro-fat)', pro: 'var(--macro-pro)' };
+
+function renderRing(totals) {
+  const card = document.getElementById('ringCard');
+  const split = macroSplit(totals);
+
+  if (split.empty) {
+    card.innerHTML = `<div class="ring-empty">Log something and this shows how your day splits between
+      carbs, fat and protein — by calories, which is the comparison that means anything.</div>`;
+    return;
+  }
+
+  const segs = donutSegments(split.parts, RING_C);
+
+  // A single macro at 100% is drawn as a plain circle, because a dasharray
+  // covering the whole circumference leaves a hairline seam.
+  const arcs = segs.map((seg) => {
+    if (seg.length <= 0) return '';
+    const full = seg.pct >= 99.95;
+    return `<circle cx="60" cy="60" r="${RING_R}" fill="none"
+      stroke="${RING_COLOR[seg.id]}" stroke-width="13"
+      ${full ? '' : `stroke-dasharray="${seg.length.toFixed(2)} ${(RING_C - seg.length).toFixed(2)}"
+      stroke-dashoffset="${seg.offset.toFixed(2)}"`} />`;
+  }).join('');
+
+  const legend = split.parts.map((p) => `
+    <div class="lrow">
+      <span class="dot" style="background:${RING_COLOR[p.id]}"></span>
+      <span class="lname">${p.label}</span>
+      <span class="lg num">${round(p.grams)}g</span>
+      <span class="lpct num" style="color:${RING_COLOR[p.id]}">${Math.round(p.pct)}%</span>
+    </div>`).join('');
+
+  const label = split.parts.map((p) => `${p.label} ${Math.round(p.pct)}%`).join(', ');
+
+  card.innerHTML = `
+    <div class="ring-wrap">
+      <svg viewBox="0 0 120 120" role="img" aria-label="Macro split: ${escapeAttr(label)}">
+        <circle cx="60" cy="60" r="${RING_R}" fill="none" stroke="var(--line)" stroke-width="13"/>
+        ${arcs}
+      </svg>
+      <div class="ring-centre">
+        <span class="rc-big num">${round(split.derivedCal)}</span>
+        <span class="rc-sub">CAL FROM MACROS</span>
+      </div>
+    </div>
+    <div class="ring-legend">
+      ${legend}
+      ${split.mismatch ? `<div class="ring-note">These macros account for ${round(split.derivedCal)} of the
+        ${round(split.loggedCal)} calories logged. Something probably went in without its macros filled in.</div>` : ''}
+    </div>`;
+}
+
 /* ---------- today at a glance ---------- */
 
 // One plain line answering "where am I", so the app is useful in a two-second
@@ -2263,6 +2412,8 @@ const BADGE = {
   'USDA reference': { cls: 'ref', text: 'USDA reference' },
   'USDA branded': { cls: 'brand', text: 'USDA branded' },
   'cached': { cls: 'cache', text: 'Saved scan' },
+  'Nutritionix': { cls: 'brand', text: 'Nutritionix' },
+  'Your foods': { cls: 'cache', text: 'Yours' },
 };
 
 function renderCandidates(list, extraNote) {
@@ -2299,7 +2450,11 @@ async function runSearch() {
 
   el.innerHTML = '<div class="search-status">Searching Open Food Facts and USDA…</div>';
   try {
-    const { results, errors } = await searchFoods(query, { usdaKey: usdaKey() });
+    const { results, errors } = await searchFoods(query, {
+      usdaKey: usdaKey(),
+      nutritionix: nutritionixCreds(),
+      localFoods: foods,
+    });
     renderCandidates(results, errors.length ? errors.join('. ') + '.' : '');
   } catch (e) {
     console.error(e);
@@ -2477,11 +2632,29 @@ async function handleBarcode(code) {
   if (!cand) {
     status.textContent = 'Checking Open Food Facts and USDA…';
     try {
-      cand = await lookupBarcode(code, { usdaKey: usdaKey() });
+      cand = await lookupBarcode(code, { usdaKey: usdaKey(), nutritionix: nutritionixCreds() });
       if (cand) store.cacheBarcode(code, candidateToCache(cand));
     } catch (e) {
       console.error(e);
     }
+  }
+
+  // A product database knew the name but has no nutrition. That is still most
+  // of the work: the name is right, the barcode gets bound, and only the
+  // numbers are left to type.
+  if (cand && cand.nameOnly) {
+    closeScanner();
+    pendingBarcode = code;
+    openLogModal(draftMeal);
+    pendingBarcode = code;
+    document.getElementById('npCode').textContent = code;
+    document.getElementById('newProductBanner').style.display = 'flex';
+    document.getElementById('mName').value =
+      [cand.brand, cand.name].filter(Boolean).join(' ').slice(0, 120);
+    document.getElementById('mSaveSpot').checked = true;
+    toast(`Found the product, but not its nutrition`);
+    document.getElementById('mCal').focus();
+    return;
   }
 
   if (cand) {
@@ -2491,11 +2664,11 @@ async function handleBarcode(code) {
     return;
   }
 
-  // 4. Nobody has it. Teach it once and it's permanent.
+  // Nobody has it at all. Teach it once and it is permanent.
   closeScanner();
   pendingBarcode = code;
   openLogModal(draftMeal);
-  pendingBarcode = code; // openLogModal resets state, so set it again
+  pendingBarcode = code;
   document.getElementById('npCode').textContent = code;
   document.getElementById('newProductBanner').style.display = 'flex';
   document.getElementById('mSaveSpot').checked = true;
@@ -2570,7 +2743,7 @@ Object.assign(window, {
   refreshPreview, setDraftMeal, setQuickMeal, showStep,
   logPreset, logRecent, adjustPreset, removeLogEntry,
   openQuickAdd, closeQuickAdd, submitQuickAdd,
-  openSettingsModal, closeSettingsModal, saveUsdaKey, connectGoogle,
+  openSettingsModal, closeSettingsModal, saveApiKeys, connectGoogle,
   runSearch, useCandidate,
   openScanner, closeScanner, toggleTorch, lookupTypedBarcode, handlePhoto, copyDiag,
   openEditStep, saveEditStep, addServRow, removeServ, setServ,

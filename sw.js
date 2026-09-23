@@ -4,7 +4,7 @@
 // new version installs in the background, the app notices and offers a Reload,
 // and old caches are deleted on activation. It replaces the ?v=N trick.
 
-const CACHE_VERSION = 'fuel-log-v6';
+const CACHE_VERSION = 'fuel-log-v8';
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const VENDOR_CACHE = `${CACHE_VERSION}-vendor`;
 
